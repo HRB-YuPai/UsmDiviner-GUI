@@ -17,6 +17,7 @@ from .exceptions import UsmDivinerError
 from .keys import parse_full_key
 from .models import ProcessOptions
 from .processor import process_one
+from .tools import find_ffmpeg, find_vgmstream
 from .usm import collect_usm_inputs
 
 logger = logging.getLogger(__name__)
@@ -607,6 +608,29 @@ HTML_TEMPLATE = """<!doctype html>
 
         .copied-flash {
             animation: copiedFlash 680ms ease;
+        }
+
+        .copy-toast {
+            position: fixed;
+            left: 50%;
+            bottom: 22px;
+            transform: translateX(-50%) translateY(10px);
+            background: var(--surface-2);
+            color: var(--fg);
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            padding: 6px 10px;
+            font-size: 12px;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 180ms ease, transform 180ms ease;
+            z-index: 80;
+            box-shadow: 0 8px 20px #00000055;
+        }
+
+        .copy-toast.show {
+            opacity: 1;
+            transform: translateX(-50%) translateY(0);
         }
 
         @keyframes copiedFlash {
@@ -1251,6 +1275,8 @@ HTML_TEMPLATE = """<!doctype html>
         </div>
     </div>
 
+    <div id="copy_toast" class="copy-toast"></div>
+
     <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
     <script>
         const I18N = JSON.parse(__TRANSLATIONS_JSON__);
@@ -1259,6 +1285,9 @@ HTML_TEMPLATE = """<!doctype html>
         let logLines = [];
         let blkVersionsData = null;
         let blkParsePending = false;
+        let copyToastTimer = null;
+        let lastLogLine = null;
+        let lastLogTs = 0;
 
         function byId(id) { return document.getElementById(id); }
 
@@ -1360,7 +1389,7 @@ HTML_TEMPLATE = """<!doctype html>
                     if (cell.id) td.id = cell.id;
                     if (cell.id && (cell.id.endsWith("_key1") || cell.id.endsWith("_key2") || cell.id.endsWith("_genshin"))) {
                         td.ondblclick = () => copyCellText(td);
-                        td.title = "Double-click to copy";
+                        td.title = t(currentLang()).cell_copy_hint;
                     }
                     tr.appendChild(td);
                 });
@@ -1395,6 +1424,7 @@ HTML_TEMPLATE = """<!doctype html>
         async function copyCellText(cell) {
             const text = (cell.textContent || "").trim();
             if (!text || text === "—") return;
+            const dict = t(currentLang());
             try {
                 if (navigator.clipboard && navigator.clipboard.writeText) {
                     await navigator.clipboard.writeText(text);
@@ -1409,9 +1439,24 @@ HTML_TEMPLATE = """<!doctype html>
                 cell.classList.remove("copied-flash");
                 void cell.offsetWidth;
                 cell.classList.add("copied-flash");
+                showCopyToast(dict.cell_copied);
             } catch (_) {
-                // ignore clipboard failure in restricted environment
+                showCopyToast(dict.cell_copy_failed);
             }
+        }
+
+        function showCopyToast(message) {
+            const el = byId("copy_toast");
+            if (!el || !message) return;
+            el.textContent = message;
+            el.classList.add("show");
+            if (copyToastTimer) {
+                clearTimeout(copyToastTimer);
+            }
+            copyToastTimer = setTimeout(() => {
+                el.classList.remove("show");
+                copyToastTimer = null;
+            }, 1200);
         }
 
         function initColumnResizers() {
@@ -1605,6 +1650,13 @@ HTML_TEMPLATE = """<!doctype html>
         }
 
         function appendLog(line) {
+            const now = Date.now();
+            // Guard against accidental duplicate signal bindings.
+            if (line === lastLogLine && (now - lastLogTs) < 300) {
+                return;
+            }
+            lastLogLine = line;
+            lastLogTs = now;
             logLines.push(line);
             renderLogBox();
         }
@@ -1898,6 +1950,10 @@ HTML_TEMPLATE = """<!doctype html>
         }
 
         new QWebChannel(qt.webChannelTransport, function(channel) {
+            if (window.__usmBridgeBound) {
+                return;
+            }
+            window.__usmBridgeBound = true;
             bridge = channel.objects.bridge;
             bridge.logMessage.connect(appendLog);
             bridge.runStateChanged.connect(setRunning);
@@ -2283,6 +2339,18 @@ class WebBridge(QObject):
                     workers=max_workers if use_parallel else 1,
                 )
             )
+            if opt.manual_key is not None:
+                self.logMessage.emit(f"[INFO] manual key: {opt.manual_key:016X}")
+            if not opt.extract_only:
+                self.logMessage.emit(
+                    "[INFO] vgmstream: "
+                    + (find_vgmstream(opt.vgmstream) or "not found; audio will be extracted only")
+                )
+            if opt.mux_mkv:
+                self.logMessage.emit(
+                    "[INFO] ffmpeg: "
+                    + (find_ffmpeg(opt.ffmpeg) or "not found; MKV mux will be skipped")
+                )
 
             reports: list[dict] = []
             done_count = 0
@@ -2318,6 +2386,8 @@ class WebBridge(QObject):
                             )
                         )
                         self.logMessage.emit(_summary_line(self._get_language(), report))
+                        for detail in _report_detail_lines(report):
+                            self.logMessage.emit(detail)
             else:
                 for path in files:
                     row_id = path_to_id.get(str(path), "")
@@ -2365,6 +2435,8 @@ class WebBridge(QObject):
                         )
                     )
                     self.logMessage.emit(_summary_line(self._get_language(), report))
+                    for detail in _report_detail_lines(report):
+                        self.logMessage.emit(detail)
 
             ok = sum(1 for r in reports if r.get("status") == "ok")
             skipped = sum(1 for r in reports if r.get("status") == "skipped")
@@ -2393,6 +2465,65 @@ def _summary_line(lang: str, report: dict) -> str:
     return _t(lang, "error_line", file=file_name, reason=reason)
 
 
+def _report_detail_lines(report: dict) -> list[str]:
+    if report.get("status") != "ok":
+        return []
+
+    lines: list[str] = []
+    if report.get("extract_only"):
+        lines.append("     mode: extract-only")
+    else:
+        lines.append(
+            "     key: {full}  key1={k1} key2={k2}".format(
+                full=report.get("full_key_hex") or "-",
+                k1=report.get("key1_hex_little") or "-",
+                k2=report.get("key2_hex_little") or "-",
+            )
+        )
+
+    video = report.get("video") or {}
+    if video.get("path"):
+        lines.append("     video: {path} ({fmt})".format(path=video["path"], fmt=video.get("format") or "unknown"))
+
+    audio_map = report.get("audio") or {}
+    for ch, audio in sorted(audio_map.items(), key=lambda item: int(item[0]) if str(item[0]).isdigit() else str(item[0])):
+        if audio.get("raw"):
+            lines.append("     audio ch{ch}: {fmt} (raw)".format(ch=ch, fmt=audio.get("format") or "unknown"))
+            continue
+
+        hca = audio.get("hca") or {}
+        hca_str = ""
+        if audio.get("format") == "hca":
+            ciph_type = hca.get("ciph_type")
+            ciph_map = {0: "none", 1: "keyless", 56: "keyed"}
+            hca_str = f", hca_ciph={ciph_type}({ciph_map.get(ciph_type, 'unknown')})"
+
+        dec = audio.get("decode") or {}
+        wav = f", wav={dec.get('wav')}" if dec.get("ok") else ""
+        lines.append(
+            "     audio ch{ch}: {fmt}, audiomask={mask} ({conf}){hca}{wav}".format(
+                ch=ch,
+                fmt=audio.get("format") or "unknown",
+                mask=audio.get("use_audio_mask"),
+                conf=audio.get("confidence") or "unknown",
+                hca=hca_str,
+                wav=wav,
+            )
+        )
+
+    mux = report.get("mux")
+    if mux:
+        if mux.get("ok"):
+            lines.append("     mkv: {mkv}".format(mkv=mux.get("mkv")))
+        else:
+            lines.append("     mkv: skipped ({msg})".format(msg=mux.get("message") or mux.get("log_tail") or "unknown"))
+
+    if report.get("report_written"):
+        lines.append("     report: {path}".format(path=report.get("report_path") or "(unknown)"))
+
+    return lines
+
+
 def main() -> int:
     app = QApplication([])
     view = QWebEngineView()
@@ -2404,20 +2535,7 @@ def main() -> int:
     channel.registerObject("bridge", bridge)
     view.page().setWebChannel(channel)
 
-    bridge.logMessage.connect(
-        lambda line: view.page().runJavaScript(f"appendLog({json.dumps(line)});")
-    )
-    bridge.runStateChanged.connect(
-        lambda running: view.page().runJavaScript(
-            f"setRunning({'true' if running else 'false'});"
-        )
-    )
     bridge.windowTitleChanged.connect(view.setWindowTitle)
-    bridge.fieldChosen.connect(
-        lambda field, value: view.page().runJavaScript(
-            f"setField({json.dumps(field)}, {json.dumps(value)});"
-        )
-    )
 
     html = _render_html()
     # Use local workspace root as base URL so relative asset paths can be loaded.
