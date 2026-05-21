@@ -8,6 +8,7 @@ dist/
 input/
 output/
 vgmstream-win64/
+.vscode/
 .DS_Store
 
 # Keep tool docs, but do not version bundled binaries.
