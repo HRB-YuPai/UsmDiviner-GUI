@@ -1,98 +1,162 @@
 # UsmDiviner
 
-UsmDiviner 是一个用于处理 CRI USM 文件的命令行工具。它会尝试从视频流恢复 USM 密钥，提取解密后的视频和音频，并在找到 vgmstream 时自动把音频转为 WAV。
+## 简介 | Overview
 
-## 功能
+**中文**
+UsmDiviner 是一个用于处理 CRI USM 文件的工具，支持命令行与 GUI。它可以自动尝试恢复 USM 密钥、提取视频与音频，并在可用时自动调用 vgmstream/ffmpeg 完成解码和封装。
 
-- 无需预置密钥，自动尝试恢复 USM 密钥
-- 可处理单个 USM 文件，也可递归处理目录中的 `.usm` 文件
-- 默认启用多进程，可用 `--no-parallel` 关闭
+**English**
+UsmDiviner is a CRI USM processing tool with both CLI and GUI support. It can automatically recover USM keys, extract video/audio streams, and optionally use vgmstream/ffmpeg for decoding and muxing.
 
-## 获取 vgmstream (Windows)
+## 功能 | Features
 
-vgmstream 用于将 HCA/ADX 解码为 WAV。
+**中文**
+- 自动尝试恢复 USM 密钥（无需预置密钥）
+- 支持单文件或目录递归批量处理 `.usm`
+- 支持报告导出、音频解码、MKV 封装
+- 提供 GUI，包括 BLK `versions.json` 查看
 
-1. 打开 <https://vgmstream.org/>
-2. 下载包含 `vgmstream-cli.exe` 的 Windows 命令行版本
-3. 解压后，将整个文件夹放到项目根目录，并改名为 `vgmstream-win64`
+**English**
+- Automatic USM key recovery (no pre-supplied key required)
+- Single-file and recursive batch processing for `.usm`
+- Report export, audio decoding, and MKV muxing support
+- GUI included, with BLK `versions.json` viewer
 
-推荐目录位置：
+## 环境要求 | Requirements
 
-```text
-UsmDiviner/
-├─ UsmDiviner.py
-├─ usmdiviner/
-└─ vgmstream-win64/
-   └─ vgmstream-cli.exe
-   └─ *.dll
-   └─ ...
-```
+**中文**
+- Python 3.10+
+- GUI 需要 `PySide6`
 
-保持上述路径时，UsmDiviner 会自动找到 vgmstream。
-
-## 使用方法
-
-需要 Python 3.10 或更高版本。
+**English**
+- Python 3.10+
+- `PySide6` is required for GUI
 
 ```bash
-# 获取项目
+pip install -r requirements.txt
+# or
+pip install PySide6
+```
+
+## 快速开始 | Quick Start
+
+```bash
+# clone
 git clone https://github.com/Senkin219/UsmDiviner.git
 cd UsmDiviner
 
-# 处理单个文件
+# CLI: single file
 python UsmDiviner.py input.usm
 
-# 递归处理目录中的 .usm 文件
+# CLI: folder recursive
 python UsmDiviner.py ./USM
 
-# 指定输出目录
+# CLI: specify output
 python UsmDiviner.py input.usm -o output
 
-# 使用 ffmpeg 封装为 MKV
+# CLI: mux MKV with custom ffmpeg
 python UsmDiviner.py input.usm --mux-mkv --ffmpeg "D:/tools/ffmpeg/bin/ffmpeg.exe"
+
+# GUI
+python UsmDivinerGUI.py
 ```
 
-## 命令行选项
+## 工具依赖路径 | External Tool Paths
 
-| 选项 | 说明 |
+### vgmstream
+
+**中文**
+vgmstream 用于将 HCA/ADX 解码为 WAV。推荐将可执行文件放到以下结构，程序会按平台自动匹配。
+
+**English**
+vgmstream is used to decode HCA/ADX to WAV. Place binaries in the structure below and UsmDiviner will auto-detect by platform.
+
+```text
+UsmDiviner/
+└─ assets/
+   └─ tools/
+      └─ vgmstream/
+         ├─ windows_x64/
+         │  └─ vgmstream-cli.exe
+         ├─ linux_x64/
+         │  └─ vgmstream-cli
+         ├─ linux_arm64/
+         │  └─ vgmstream-cli
+         └─ macos/
+            └─ vgmstream-cli
+```
+
+### ffmpeg
+
+**中文**
+ffmpeg 用于 `--mux-mkv`。程序优先使用项目内置 ffmpeg，其次才回退到系统 PATH。
+
+**English**
+ffmpeg is used for `--mux-mkv`. The project-local binary is preferred before falling back to system PATH.
+
+```text
+UsmDiviner/
+└─ assets/
+   └─ tools/
+      └─ ffmpeg/
+         ├─ windows_x64/
+         │  └─ ffmpeg.exe
+         ├─ linux_x64/
+         │  └─ ffmpeg
+         ├─ linux_arm64/
+         │  └─ ffmpeg
+         └─ macos/
+            └─ ffmpeg
+```
+
+## 命令行参数 | CLI Options
+
+| 选项 / Option | 说明 / Description |
 |---|---|
-| `input` | USM 文件或包含 `.usm` 的目录 |
-| `-o, --output` | 输出目录，默认为 `output` |
-| `--no-parallel` | 关闭多进程 |
-| `--report` | 为每个 USM 生成 `report.json` |
-| `--fast` | 仅使用前 50 MB 视频数据恢复密钥 |
-| `--key KEY` | 手动指定 16 位十六进制 USM 密钥 |
-| `--extract-only` | 不解密视频和音频流，仅原样提取 |
-| `--vgmstream PATH` | 手动指定 vgmstream-cli 路径 |
-| `--keep-intermediate-audio` | 音频解码成功后保留 `.hca/.adx` 和 `.hcakey` 文件 |
-| `--no-adx-audiomask` | 不对 ADX 应用 AudioMask，默认结果为杂音时可尝试使用 |
-| `--mux-mkv` | 使用 ffmpeg 封装为 MKV |
-| `--ffmpeg PATH` | 手动指定 ffmpeg 路径 |
+| `input` | USM 文件或目录 / USM file or folder |
+| `-o, --output` | 输出目录（默认 `output`）/ Output directory (default `output`) |
+| `--no-parallel` | 关闭多进程 / Disable multiprocessing |
+| `--report` | 生成 `<USM文件名>_Report.json` / Generate per-file report |
+| `--report-dir PATH` | 自定义报告目录 / Custom report directory |
+| `--report-lang {en,zh-CN,zh-TW}` | 报告目录语言 / Report directory language |
+| `--fast` | 仅用前 50 MB 视频尝试恢复密钥 / Use first 50 MB for fast key recovery |
+| `--key KEY` | 手动指定 16 位十六进制密钥 / Manually provide 16-hex key |
+| `--extract-only` | 仅提取，不解密流 / Extract only, no stream decryption |
+| `--vgmstream PATH` | 手动指定 vgmstream-cli / Custom vgmstream-cli path |
+| `--keep-intermediate-audio` | 保留 `.hca/.adx/.hcakey` / Keep intermediate audio files |
+| `--no-adx-audiomask` | 不应用 ADX AudioMask / Disable ADX AudioMask |
+| `--mux-mkv` | 使用 ffmpeg 封装 MKV / Mux MKV via ffmpeg |
+| `--ffmpeg PATH` | 手动指定 ffmpeg / Custom ffmpeg path |
 
-## 输出
+## 输出说明 | Output
 
-默认输出到：
-
-```text
-output/<usm文件名>/
-```
-
-常见文件：
+**中文**
+默认输出目录：
 
 ```text
-<name>.ivf      解密后的视频流
-<name>_ch0.wav  vgmstream 解码后的音频
-<name>.mkv      开启 --mux-mkv 且封装成功时生成
-report.json     仅开启 --report 时生成
+output/<usm_name>/
 ```
 
-中间文件 `.hca/.adx/.hcakey` 默认会在音频解码成功后删除。MKV 封装成功后，已提取的视频和音频流也会被删除。
+若启用 `--mux-mkv` 且封装成功，`.mkv` 会输出到 `output/` 根目录。
 
-## Test
+**English**
+Default output directory:
 
-UsmDiviner has been tested against all Genshin Impact USM assets available through Version Luna VI. All assets were processed correctly except for one file whose video stream is too small for reliable key recovery.
+```text
+output/<usm_name>/
+```
 
-## Credits
+When `--mux-mkv` succeeds, `.mkv` is written to `output/` root.
+
+## 测试情况 | Test Status
+
+**中文**
+项目已针对大量《原神》USM 资源进行验证，绝大多数可正常处理；极少数样本因视频流过小导致密钥恢复不稳定。
+
+**English**
+The project has been tested against a large set of Genshin Impact USM assets. Most files are processed correctly; a small number may fail key recovery when the video stream is too small.
+
+## 致谢 | Credits
 
 - USM chunk parsing and mask/key handling were implemented with reference to [GI-cutscenes](https://github.com/ToaHartor/GI-cutscenes).
 - The blind key recovery algorithm was provided by Gemini.

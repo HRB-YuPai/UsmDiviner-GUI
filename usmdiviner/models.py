@@ -67,6 +67,9 @@ class ProcessOptions:
     mux_mkv: bool
     ffmpeg: str | None
     write_report: bool
+    report_dir: str | None
+    report_language: str
+    report_selected_files: tuple[str, ...] | None
     fast: bool
     manual_key: int | None
     extract_only: bool

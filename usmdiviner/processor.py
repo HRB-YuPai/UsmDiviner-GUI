@@ -33,17 +33,39 @@ from .usm import parse_usm_chunks
 
 logger = logging.getLogger(__name__)
 
+_REPORT_FOLDER_BY_LANG = {
+    "zh-cn": "USM_解密报告",
+    "zh-tw": "USM_解密報告",
+    "en": "USM_Decryption_Reports",
+}
 
-def process_one(usm_path_str: str, opt: ProcessOptions) -> dict:
+
+def _should_write_report(usm_path: Path, opt: ProcessOptions) -> bool:
+    if opt.write_report:
+        return True
+    selected = opt.report_selected_files or ()
+    if not selected:
+        return False
+    path_key = str(usm_path.resolve())
+    return path_key in selected
+
+
+def process_one(
+    usm_path_str: str,
+    opt: ProcessOptions,
+    progress_callback=None,
+) -> dict:
     usm_path = Path(usm_path_str)
     base = usm_path.stem
     out_dir = _make_output_dir(usm_path, opt)
     out_dir.mkdir(parents=True, exist_ok=True)
+    _emit_progress(progress_callback, 4)
 
     if usm_path.stat().st_size == 0:
         raise KeyCrackError({"reason": "empty USM file"})
 
     if opt.extract_only:
+        _emit_progress(progress_callback, 12)
         with usm_path.open("rb") as fp, mmap.mmap(fp.fileno(), 0, access=mmap.ACCESS_READ) as data:
             chunks = parse_usm_chunks(data)
             video_path, video_info, audio_paths, audio_info = _demux_raw_streams(
@@ -52,6 +74,7 @@ def process_one(usm_path_str: str, opt: ProcessOptions) -> dict:
                 out_dir,
                 base,
             )
+        _emit_progress(progress_callback, 70)
         report = _build_extract_report(
             usm_path,
             out_dir,
@@ -61,24 +84,32 @@ def process_one(usm_path_str: str, opt: ProcessOptions) -> dict:
             audio_paths,
             audio_info,
         )
-        if opt.write_report:
-            (out_dir / "report.json").write_text(
+        if _should_write_report(usm_path, opt):
+            report_path = _resolve_report_path(usm_path, opt)
+            report_path.write_text(
                 json.dumps(report, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
             report["report_written"] = True
+            report["report_path"] = str(report_path)
         else:
             report["report_written"] = False
+            report["report_path"] = None
+        _emit_progress(progress_callback, 100)
         return report
 
     if opt.manual_key is not None:
         key1, key2 = split_full_key(opt.manual_key)
         crack_stats = {"skipped": True, "reason": "manual key supplied"}
+        _emit_progress(progress_callback, 28)
     else:
+        _emit_progress(progress_callback, 18)
         try:
             key1, key2, crack_stats = _crack_key(usm_path, opt.fast)
         except KeyCrackError as exc:
-            return _skip_report(usm_path, out_dir, exc.args[0], opt.write_report)
+            _emit_progress(progress_callback, 100)
+            return _skip_report(usm_path, out_dir, crack_stats=exc.args[0], opt=opt)
+        _emit_progress(progress_callback, 38)
 
     video_mask1, video_mask2, audio_mask = make_masks(key1, key2)
 
@@ -110,16 +141,18 @@ def process_one(usm_path_str: str, opt: ProcessOptions) -> dict:
             audio_mask,
             audio_decisions,
         )
+    _emit_progress(progress_callback, 62)
 
     decoded = _decode_audio(audio_paths, audio_decisions, vgmstream, key1, key2)
+    _emit_progress(progress_callback, 78)
+    mkv_path = _make_mkv_path(usm_path, opt)
     mux_report, mux_success = _maybe_mux(
         opt,
         video_path,
         audio_paths,
         audio_decisions,
         decoded,
-        out_dir,
-        base,
+        mkv_path,
     )
     _cleanup_outputs(
         mux_success,
@@ -130,6 +163,7 @@ def process_one(usm_path_str: str, opt: ProcessOptions) -> dict:
         decoded,
     )
     _clear_removed_paths(mux_success, opt.keep_intermediate_audio, decoded)
+    _emit_progress(progress_callback, 90)
 
     report = _build_report(
         usm_path,
@@ -147,15 +181,48 @@ def process_one(usm_path_str: str, opt: ProcessOptions) -> dict:
     )
     if opt.manual_key is not None:
         report["manual_key"] = True
-    if opt.write_report:
-        (out_dir / "report.json").write_text(
+    if _should_write_report(usm_path, opt):
+        report_path = _resolve_report_path(usm_path, opt)
+        report_path.write_text(
             json.dumps(report, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
         report["report_written"] = True
+        report["report_path"] = str(report_path)
     else:
         report["report_written"] = False
+        report["report_path"] = None
+    _emit_progress(progress_callback, 100)
     return report
+
+
+def _emit_progress(callback, value: int) -> None:
+    if callback is None:
+        return
+    try:
+        callback(int(max(0, min(100, value))))
+    except Exception:
+        # Progress reporting should never break processing.
+        return
+
+
+def _make_mkv_path(usm_path: Path, opt: ProcessOptions) -> Path:
+    output_root = Path(opt.output_dir)
+    output_root.mkdir(parents=True, exist_ok=True)
+
+    base = usm_path.stem
+    rel_hint = ""
+    if opt.input_root:
+        try:
+            rel = usm_path.resolve().relative_to(Path(opt.input_root).resolve())
+            rel_parent = rel.parent
+            if rel_parent.parts:
+                rel_hint = "__".join(rel_parent.parts)
+        except ValueError:
+            rel_hint = ""
+
+    file_name = f"{base}.mkv" if not rel_hint else f"{base}__{rel_hint}.mkv"
+    return output_root / file_name
 
 
 def _make_output_dir(usm_path: Path, opt: ProcessOptions) -> Path:
@@ -182,7 +249,7 @@ def _crack_key(usm_path: Path, fast: bool) -> tuple[bytes, bytes, dict]:
     return key1, key2, crack_stats
 
 
-def _skip_report(usm_path: Path, out_dir: Path, crack_stats: dict, write_report: bool) -> dict:
+def _skip_report(usm_path: Path, out_dir: Path, crack_stats: dict, opt: ProcessOptions) -> dict:
     report = {
         "file": str(usm_path),
         "status": "skipped",
@@ -190,15 +257,40 @@ def _skip_report(usm_path: Path, out_dir: Path, crack_stats: dict, write_report:
         "reason": crack_stats.get("reason", "key recovery failed"),
         "crack": crack_stats,
     }
-    if write_report:
-        (out_dir / "report.json").write_text(
+    if _should_write_report(usm_path, opt):
+        report_path = _resolve_report_path(usm_path, opt=opt)
+        report_path.write_text(
             json.dumps(report, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
         report["report_written"] = True
+        report["report_path"] = str(report_path)
     else:
         report["report_written"] = False
+        report["report_path"] = None
     return report
+
+
+def _resolve_report_path(usm_path: Path, opt: ProcessOptions | None) -> Path:
+    custom_dir = opt.report_dir if opt else None
+    if custom_dir:
+        report_root = Path(custom_dir)
+    else:
+        lang = opt.report_language if opt else "en"
+        folder_name = _REPORT_FOLDER_BY_LANG.get(lang.lower(), _REPORT_FOLDER_BY_LANG["en"])
+        report_root = usm_path.parent / folder_name
+
+    report_root.mkdir(parents=True, exist_ok=True)
+    candidate = report_root / f"{usm_path.stem}_Report.json"
+    if not candidate.exists():
+        return candidate
+
+    index = 2
+    while True:
+        numbered = report_root / f"{usm_path.stem}_Report_{index}.json"
+        if not numbered.exists():
+            return numbered
+        index += 1
 
 
 def _collect_audio_probe_payloads(data, chunks: list[UsmChunk]) -> dict[int, list[bytes]]:
@@ -356,8 +448,7 @@ def _maybe_mux(
     audio_paths: dict[int, Path],
     audio_decisions: dict[int, AudioDecision],
     decoded: dict[int, dict],
-    out_dir: Path,
-    base: str,
+    mkv_path: Path,
 ) -> tuple[dict | None, bool]:
     if not opt.mux_mkv:
         return None, False
@@ -380,11 +471,10 @@ def _maybe_mux(
     if not ffmpeg:
         return {"ok": False, "mkv": None, "log_tail": "ffmpeg not found"}, False
 
-    mkv_path = out_dir / f"{base}.mkv"
     try:
         ok, log = mux_to_mkv(ffmpeg, video_path, mux_audio_inputs, mkv_path)
     except ExternalToolError as exc:
-        logger.warning("mkv mux failed for %s: %s", base, exc)
+        logger.warning("mkv mux failed for %s: %s", video_path.name, exc)
         message = "ffmpeg mux failed; extracted streams were kept"
         return {
             "ok": False,
@@ -396,7 +486,7 @@ def _maybe_mux(
 
     if not ok:
         message = _mux_failure_message(video_path, log)
-        logger.warning("mkv mux skipped for %s: %s", base, message)
+        logger.warning("mkv mux skipped for %s: %s", video_path.name, message)
         return {
             "ok": False,
             "mkv": None,

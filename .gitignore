@@ -9,3 +9,10 @@ input/
 output/
 vgmstream-win64/
 .DS_Store
+
+# Keep tool docs, but do not version bundled binaries.
+assets/tools/**
+!assets/tools/**/
+!assets/tools/**/*.md
+!assets/tools/**/COPYING
+!assets/tools/**/USAGE.md

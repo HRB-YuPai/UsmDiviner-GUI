@@ -24,7 +24,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("input", help="USM file or directory containing .usm files")
     parser.add_argument("-o", "--output", default="output", help="output directory")
     parser.add_argument("--no-parallel", action="store_true", help="disable multiprocessing")
-    parser.add_argument("--report", action="store_true", help="write per-file report.json")
+    parser.add_argument(
+        "--report",
+        action="store_true",
+        help="write per-file <USM filename>_Report.json",
+    )
+    parser.add_argument(
+        "--report-dir",
+        default=None,
+        help="custom directory for report JSON files; disables auto-created localized report folder",
+    )
+    parser.add_argument(
+        "--report-lang",
+        default="en",
+        choices=["en", "zh-CN", "zh-TW"],
+        help="language used for auto-created report folder name when --report-dir is omitted",
+    )
     parser.add_argument(
         "--fast",
         action="store_true",
@@ -108,6 +123,9 @@ def main(argv: list[str] | None = None) -> int:
         mux_mkv=args.mux_mkv,
         ffmpeg=args.ffmpeg,
         write_report=args.report,
+        report_dir=args.report_dir,
+        report_language=args.report_lang,
+        report_selected_files=None,
         fast=args.fast,
         manual_key=args.key,
         extract_only=args.extract_only,
@@ -223,4 +241,4 @@ def print_summary(report: dict) -> None:
         else:
             logger.info("     mkv: skipped (%s)", mux.get("message") or mux.get("log_tail"))
     if report.get("report_written"):
-        logger.info("     report: %s", Path(report["output_dir"]) / "report.json")
+        logger.info("     report: %s", report.get("report_path") or "(unknown)")

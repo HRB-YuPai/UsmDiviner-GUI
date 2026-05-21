@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import platform
 import shutil
 import subprocess
 from pathlib import Path
@@ -10,6 +11,77 @@ from .exceptions import ExternalToolError
 from .keys import full_key_int
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_arch(machine: str) -> str:
+    arch = machine.lower().strip()
+    if arch in {"x86_64", "amd64"}:
+        return "x64"
+    if arch in {"aarch64", "arm64"}:
+        return "arm64"
+    return arch
+
+
+def _preferred_vgmstream_dirs() -> tuple[Path, ...]:
+    system = platform.system().lower()
+    arch = _normalize_arch(platform.machine())
+
+    if system == "windows":
+        return (
+            Path("assets") / "tools" / "vgmstream" / "windows_x64",
+            Path("vgmstream") / "windows_x64",
+        )
+    if system == "darwin":
+        return (
+            Path("assets") / "tools" / "vgmstream" / "macos",
+            Path("vgmstream") / "macos",
+        )
+    if system == "linux":
+        if arch == "arm64":
+            return (
+                Path("assets") / "tools" / "vgmstream" / "linux_arm64",
+                Path("assets") / "tools" / "vgmstream" / "linux_x64",
+                Path("vgmstream") / "linux_arm64",
+                Path("vgmstream") / "linux_x64",
+            )
+        return (
+            Path("assets") / "tools" / "vgmstream" / "linux_x64",
+            Path("assets") / "tools" / "vgmstream" / "linux_arm64",
+            Path("vgmstream") / "linux_x64",
+            Path("vgmstream") / "linux_arm64",
+        )
+    return tuple()
+
+
+def _preferred_ffmpeg_dirs() -> tuple[Path, ...]:
+    system = platform.system().lower()
+    arch = _normalize_arch(platform.machine())
+
+    if system == "windows":
+        return (
+            Path("assets") / "tools" / "ffmpeg" / "windows_x64",
+            Path("ffmpeg") / "windows_x64",
+        )
+    if system == "darwin":
+        return (
+            Path("assets") / "tools" / "ffmpeg" / "macos",
+            Path("ffmpeg") / "macos",
+        )
+    if system == "linux":
+        if arch == "arm64":
+            return (
+                Path("assets") / "tools" / "ffmpeg" / "linux_arm64",
+                Path("assets") / "tools" / "ffmpeg" / "linux_x64",
+                Path("ffmpeg") / "linux_arm64",
+                Path("ffmpeg") / "linux_x64",
+            )
+        return (
+            Path("assets") / "tools" / "ffmpeg" / "linux_x64",
+            Path("assets") / "tools" / "ffmpeg" / "linux_arm64",
+            Path("ffmpeg") / "linux_x64",
+            Path("ffmpeg") / "linux_arm64",
+        )
+    return tuple()
 
 
 def _existing_file(path: str | Path | None) -> str | None:
@@ -23,21 +95,34 @@ def find_vgmstream(user_path: str | None) -> str | None:
     if user_path:
         return _existing_file(user_path)
 
+    roots = [Path.cwd(), Path(__file__).resolve().parent.parent]
     names = ("vgmstream-cli.exe", "vgmstream-cli", "test.exe", "test", "vgmstream")
+
+    # Prefer bundled binaries that match the current OS/arch.
+    preferred_dirs = _preferred_vgmstream_dirs()
+    for root in roots:
+        for rel in preferred_dirs:
+            for name in names:
+                hit = _existing_file(root / rel / name)
+                if hit:
+                    return hit
+
+    # Fallback to PATH for system-wide installations.
     for name in names:
         hit = shutil.which(name)
         if hit:
             return hit
 
-    roots = [Path.cwd(), Path(__file__).resolve().parent.parent]
-    common_dirs = (
+    # Backward-compatibility for older project layouts.
+    legacy_dirs = (
+        Path("assets") / "tools" / "vgmstream",
         Path("vgmstream-win64"),
         Path("vgmstream"),
         Path("bin"),
         Path("tools") / "vgmstream",
     )
     for root in roots:
-        for rel in common_dirs:
+        for rel in legacy_dirs:
             for name in names:
                 hit = _existing_file(root / rel / name)
                 if hit:
@@ -58,7 +143,51 @@ def find_vgmstream(user_path: str | None) -> str | None:
 def find_ffmpeg(user_path: str | None) -> str | None:
     if user_path:
         return _existing_file(user_path)
-    return shutil.which("ffmpeg") or shutil.which("ffmpeg.exe")
+
+    roots = [Path.cwd(), Path(__file__).resolve().parent.parent]
+    names = ("ffmpeg.exe", "ffmpeg")
+
+    # Prefer bundled ffmpeg that matches current OS/arch.
+    preferred_dirs = _preferred_ffmpeg_dirs()
+    for root in roots:
+        for rel in preferred_dirs:
+            for sub in (Path("."), Path("bin")):
+                for name in names:
+                    hit = _existing_file(root / rel / sub / name)
+                    if hit:
+                        return hit
+
+    # Fallback to PATH for system-wide installations.
+    for name in names:
+        hit = shutil.which(name)
+        if hit:
+            return hit
+
+    # Backward-compatibility for older layouts.
+    legacy_dirs = (
+        Path("assets") / "tools" / "ffmpeg",
+        Path("ffmpeg"),
+        Path("bin"),
+        Path("tools") / "ffmpeg",
+    )
+    for root in roots:
+        for rel in legacy_dirs:
+            for sub in (Path("."), Path("bin")):
+                for name in names:
+                    hit = _existing_file(root / rel / sub / name)
+                    if hit:
+                        return hit
+
+    if os.name != "nt":
+        for path in (
+            "/usr/local/bin/ffmpeg",
+            "/opt/homebrew/bin/ffmpeg",
+            "/usr/bin/ffmpeg",
+        ):
+            hit = _existing_file(path)
+            if hit:
+                return hit
+    return None
 
 
 def write_hcakey_file(audio_path: Path, key1: bytes, key2: bytes) -> Path:
