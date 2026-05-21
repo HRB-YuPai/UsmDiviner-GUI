@@ -162,6 +162,7 @@ def process_one(
         audio_paths,
         decoded,
     )
+    _cleanup_empty_mux_dir(opt, mux_success, out_dir)
     _clear_removed_paths(mux_success, opt.keep_intermediate_audio, decoded)
     _emit_progress(progress_callback, 90)
 
@@ -550,6 +551,16 @@ def _clear_removed_paths(
                 dec["removed_after_mux"] = True
             elif not keep_intermediate_audio:
                 dec["removed_after_decode"] = True
+
+
+def _cleanup_empty_mux_dir(opt: ProcessOptions, mux_success: bool, out_dir: Path) -> None:
+    if not opt.mux_mkv or not mux_success:
+        return
+    try:
+        out_dir.rmdir()
+    except OSError:
+        # Keep non-empty or inaccessible directories.
+        return
 
 
 def _build_report(

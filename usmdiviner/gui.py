@@ -495,6 +495,15 @@ HTML_TEMPLATE = """<!doctype html>
             letter-spacing: 0.2px;
         }
 
+        /* Center selected columns: name, size, Mask_1, Mask_2, USM key */
+        .file-table td:nth-child(2),
+        .file-table td:nth-child(3),
+        .file-table td:nth-child(5),
+        .file-table td:nth-child(6),
+        .file-table td:nth-child(7) {
+            text-align: center;
+        }
+
         .mono { font-family: Consolas, Courier New, monospace; }
 
         .actions {
