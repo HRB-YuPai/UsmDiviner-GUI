@@ -16,3 +16,11 @@ assets/tools/**
 !assets/tools/**/*.md
 !assets/tools/**/COPYING
 !assets/tools/**/USAGE.md
+
+# Allow ffmpeg shared-build runtime files to be versioned.
+!assets/tools/ffmpeg/**/ffmpeg
+!assets/tools/ffmpeg/**/ffmpeg.exe
+!assets/tools/ffmpeg/**/*.dll
+!assets/tools/ffmpeg/**/*.so
+!assets/tools/ffmpeg/**/*.so.*
+!assets/tools/ffmpeg/**/*.dylib

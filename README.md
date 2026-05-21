@@ -90,9 +90,11 @@ UsmDiviner/
 
 **中文**
 ffmpeg 用于 `--mux-mkv`。程序优先使用项目内置 ffmpeg，其次才回退到系统 PATH。
+建议使用 shared build（动态库版本）：Windows 可将 `ffmpeg.exe` 与其 `.dll` 放在同一目录，Linux/macOS 可使用 `bin/ffmpeg` + 相邻 `lib/` 目录，程序会自动补运行库搜索路径。
 
 **English**
 ffmpeg is used for `--mux-mkv`. The project-local binary is preferred before falling back to system PATH.
+Shared builds are recommended: on Windows, keep `ffmpeg.exe` with its `.dll` files in the same folder; on Linux/macOS, a `bin/ffmpeg` plus sibling `lib/` directory layout is supported and configured automatically.
 
 ```text
 UsmDiviner/
@@ -100,13 +102,30 @@ UsmDiviner/
    └─ tools/
       └─ ffmpeg/
          ├─ windows_x64/
-         │  └─ ffmpeg.exe
+         │  ├─ ffmpeg.exe
+         │  └─ *.dll
          ├─ linux_x64/
-         │  └─ ffmpeg
+         │  ├─ bin/
+         │  │  └─ ffmpeg
+         │  └─ lib/
+         │     └─ *.so*
          ├─ linux_arm64/
-         │  └─ ffmpeg
+         │  ├─ bin/
+         │  │  └─ ffmpeg
+         │  └─ lib/
+         │     └─ *.so*
          └─ macos/
-            └─ ffmpeg
+            ├─ ffmpeg
+            └─ *.dylib
+```
+
+Also supported (same per-platform folder):
+
+```text
+windows_x64/bin/ffmpeg.exe + *.dll
+linux_x64/bin/ffmpeg + *.so*
+linux_arm64/bin/ffmpeg + *.so*
+macos/bin/ffmpeg + *.dylib
 ```
 
 ## 命令行参数 | CLI Options

@@ -5,6 +5,7 @@ import os
 import platform
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 from .exceptions import ExternalToolError
@@ -254,6 +255,31 @@ def mux_to_mkv(
         cmd.extend(["-c:a", "flac"])
     cmd.append(str(output_mkv))
 
+    # Run ffmpeg from its own folder and advertise nearby runtime-lib folders.
+    ffmpeg_cwd = None
+    env = os.environ.copy()
+    try:
+        ffmpeg_dir = Path(ffmpeg).resolve().parent
+        ffmpeg_cwd = str(ffmpeg_dir)
+        runtime_dirs = [ffmpeg_dir]
+
+        parent_lib = ffmpeg_dir.parent / "lib"
+        if parent_lib.is_dir():
+            runtime_dirs.append(parent_lib)
+
+        if os.name == "nt":
+            env["PATH"] = os.pathsep.join([str(path) for path in runtime_dirs] + [env.get("PATH", "")])
+        elif sys.platform == "darwin":
+            env["DYLD_LIBRARY_PATH"] = os.pathsep.join(
+                [str(path) for path in runtime_dirs] + ([env["DYLD_LIBRARY_PATH"]] if env.get("DYLD_LIBRARY_PATH") else [])
+            )
+        else:
+            env["LD_LIBRARY_PATH"] = os.pathsep.join(
+                [str(path) for path in runtime_dirs] + ([env["LD_LIBRARY_PATH"]] if env.get("LD_LIBRARY_PATH") else [])
+            )
+    except OSError:
+        ffmpeg_cwd = None
+
     try:
         proc = subprocess.run(
             cmd,
@@ -261,6 +287,8 @@ def mux_to_mkv(
             stderr=subprocess.STDOUT,
             text=True,
             timeout=timeout,
+            cwd=ffmpeg_cwd,
+            env=env,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         _safe_unlink(output_mkv)
