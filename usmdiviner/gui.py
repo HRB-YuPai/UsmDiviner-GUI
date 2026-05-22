@@ -222,6 +222,7 @@ HTML_TEMPLATE = """<!doctype html>
             padding: 6px 8px;
             font-size: 12px;
             outline: none;
+            font-family: "UsmDivinerZh", "Segoe UI", "Noto Sans", "Microsoft YaHei", "PingFang TC", sans-serif;
         }
 
         .grid {
@@ -351,6 +352,7 @@ HTML_TEMPLATE = """<!doctype html>
         input[type="text"]::placeholder {
             color: var(--muted);
             opacity: 0.78;
+            font-family: "UsmDivinerZh", "Segoe UI", "Noto Sans", "Microsoft YaHei", "PingFang TC", sans-serif;
         }
 
         .btn {
@@ -363,6 +365,7 @@ HTML_TEMPLATE = """<!doctype html>
             font-size: 12px;
             font-weight: 600;
             white-space: nowrap;
+            font-family: "UsmDivinerZh", "Segoe UI", "Noto Sans", "Microsoft YaHei", "PingFang TC", sans-serif;
         }
 
         .btn:hover { filter: brightness(1.08); }
@@ -575,7 +578,7 @@ HTML_TEMPLATE = """<!doctype html>
             font-size: 11px;
             font-weight: 700;
             letter-spacing: 0.2px;
-            font-family: Consolas, Courier New, monospace;
+            font-family: "UsmDivinerZh", "Segoe UI", "Noto Sans", "Microsoft YaHei", "PingFang TC", sans-serif;
         }
 
         .cell-progress {
@@ -713,6 +716,7 @@ HTML_TEMPLATE = """<!doctype html>
             box-shadow: 0 16px 36px #00000066;
             display: flex;
             flex-direction: column;
+            overflow: hidden;
         }
 
         .modal-head {
@@ -739,6 +743,17 @@ HTML_TEMPLATE = """<!doctype html>
             font-family: Consolas, Courier New, monospace;
             font-size: 12px;
             line-height: 1.4;
+        }
+
+        .log-box.empty {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            color: var(--muted);
+            font-family: "UsmDivinerZh", "Segoe UI", "Noto Sans", "Microsoft YaHei", "PingFang TC", sans-serif;
+            font-size: 13px;
+            line-height: 1.5;
         }
 
         .modal-actions {
@@ -984,6 +999,8 @@ HTML_TEMPLATE = """<!doctype html>
             padding: 14px 16px;
             border-top: 1px solid var(--line);
             background: var(--panel1);
+            border-bottom-left-radius: 14px;
+            border-bottom-right-radius: 14px;
         }
 
         .modal-actions .btn {
@@ -1149,8 +1166,8 @@ HTML_TEMPLATE = """<!doctype html>
             </div>
             <div id="log_box" class="log-box"></div>
             <div class="modal-actions">
-                <button class="btn" id="export_log_btn" onclick="exportLog()">Export</button>
-                <button class="btn" id="clear_log_btn" onclick="clearLog()">Clear log</button>
+                <button class="btn" id="export_log_btn" onclick="exportLog()" disabled>Export</button>
+                <button class="btn" id="clear_log_btn" onclick="clearLog()" disabled>Clear log</button>
                 <button class="btn" id="close_log_btn" onclick="closeLogModal()">Close</button>
             </div>
         </div>
@@ -1368,9 +1385,9 @@ HTML_TEMPLATE = """<!doctype html>
                     { text: row.name, title: row.path },
                     { text: formatBytes(row.size_bytes) },
                     { text: formatDate(row.created_ts) },
-                    { id: `${row.id}_key1`, text: "—" },
-                    { id: `${row.id}_key2`, text: "—" },
-                    { id: `${row.id}_genshin`, text: "—" },
+                    { id: `${row.id}_key1`, text: row.key1_hex_little || "—" },
+                    { id: `${row.id}_key2`, text: row.key2_hex_little || "—" },
+                    { id: `${row.id}_genshin`, text: row.genshin_like_key ?? "—" },
                     {
                         id: `${row.id}_action`,
                         html: "—",
@@ -1426,7 +1443,9 @@ HTML_TEMPLATE = """<!doctype html>
             if (!text || text === "—") return;
             const dict = t(currentLang());
             try {
-                if (navigator.clipboard && navigator.clipboard.writeText) {
+                if (bridge && bridge.copyText) {
+                    bridge.copyText(text);
+                } else if (navigator.clipboard && navigator.clipboard.writeText) {
                     await navigator.clipboard.writeText(text);
                 } else {
                     const ta = document.createElement("textarea");
@@ -1641,53 +1660,68 @@ HTML_TEMPLATE = """<!doctype html>
             document.getElementById("opt_mux_mkv_tooltip").textContent = dict.opt_mux_mkv_tooltip;
             document.getElementById("opt_manual_key_tooltip").textContent = dict.opt_manual_key_tooltip;
             refreshFileList();
-            syncInputMode();
+            syncInputMode(true);
             syncRules();
             updateManualKeyVisibility();
             renderBlkStatus();
             renderBlkModal();
+            renderLogBox();
             initColumnResizers();
         }
 
         function appendLog(line) {
-            const now = Date.now();
-            // Guard against accidental duplicate signal bindings.
-            if (line === lastLogLine && (now - lastLogTs) < 300) {
+            if ((line || "").trim().length === 0) {
                 return;
             }
             lastLogLine = line;
-            lastLogTs = now;
+            lastLogTs = Date.now();
             logLines.push(line);
             renderLogBox();
+        }
+
+        function hasUsableLogs() {
+            return logLines.some((line) => (line || "").trim().length > 0);
+        }
+
+        function updateLogUiState() {
+            const exportBtn = byId("export_log_btn");
+            const clearBtn = byId("clear_log_btn");
+            const hasLogs = hasUsableLogs();
+            if (exportBtn) exportBtn.disabled = !hasLogs;
+            if (clearBtn) clearBtn.disabled = !hasLogs;
         }
 
         function renderLogBox() {
             const box = byId("log_box");
             if (!box) return;
-            box.textContent = logLines.join("\\n");
-            box.scrollTop = box.scrollHeight;
+            if (!hasUsableLogs()) {
+                box.classList.add("empty");
+                box.textContent = t(currentLang()).log_empty_placeholder;
+            } else {
+                box.classList.remove("empty");
+                box.textContent = logLines.join("\\n");
+                box.scrollTop = box.scrollHeight;
+            }
+            updateLogUiState();
         }
 
         function clearLog() {
+            if (!hasUsableLogs()) {
+                updateLogUiState();
+                return;
+            }
             logLines = [];
+            lastLogLine = null;
+            lastLogTs = 0;
             renderLogBox();
         }
 
         function exportLog() {
-            const dict = t(currentLang());
+            if (!bridge || !hasUsableLogs()) return;
             const content = logLines.join("\\n");
             const ts = new Date().toISOString().replace(/[.:]/g, "-");
             const name = "usmdiviner-log-" + ts + ".txt";
-            const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement("a");
-            a.href = url;
-            a.download = name;
-            document.body.appendChild(a);
-            a.click();
-            a.remove();
-            URL.revokeObjectURL(url);
-            appendLog(dict.log_exported.replace("{name}", name));
+            bridge.exportLog(content, name);
         }
 
         function openLogModal() {
@@ -1849,13 +1883,16 @@ HTML_TEMPLATE = """<!doctype html>
             return byId("mode_batch").checked ? "batch" : "single";
         }
 
-        function syncInputMode() {
+        function syncInputMode(preserveState = false) {
             const mode = getInputMode();
             const dict = t(currentLang());
-            byId("input").value = "";
             byId("input_label").textContent = mode === "batch" ? dict.input_usm_folder : dict.input_usm_file;
             byId("input_pick_btn").textContent = mode === "batch" ? dict.pick : dict.browse;
             byId("input").placeholder = mode === "batch" ? dict.placeholder_input_folder : dict.placeholder_input_file;
+            if (preserveState) {
+                return;
+            }
+            byId("input").value = "";
             renderFileList([]);
             setOverallProgress(0, 0);
         }
@@ -2039,6 +2076,10 @@ class WebBridge(QObject):
         self.windowTitleChanged.emit(self._t("app_title"))
 
     @Slot(str)
+    def copyText(self, text: str) -> None:
+        QApplication.clipboard().setText(str(text or ""))
+
+    @Slot(str)
     def pickInput(self, mode: str) -> None:
         if mode == "batch":
             picked_dir = QFileDialog.getExistingDirectory(None, self._t("select_usm_folder"))
@@ -2186,6 +2227,29 @@ class WebBridge(QObject):
             return
         self.logMessage.emit(self._t("report_saved_to", path=target_path))
 
+    @Slot(str, str)
+    def exportLog(self, content: str, suggested_name: str) -> None:
+        base_dir = ASSETS_DIR.parent.resolve()
+        fallback_name = Path(str(suggested_name or "").strip() or "usmdiviner-log.txt").name
+        default_path = str(base_dir / fallback_name)
+
+        target_path, _ = QFileDialog.getSaveFileName(
+            None,
+            self._t("select_log_save_file"),
+            default_path,
+            "Text (*.txt);;All files (*.*)",
+        )
+        if not target_path:
+            target_path = default_path
+
+        try:
+            Path(target_path).write_text(str(content or ""), encoding="utf-8")
+        except OSError as exc:
+            self.logMessage.emit(self._t("log_export_failed", reason=exc))
+            return
+
+        self.logMessage.emit(self._t("log_exported", path=target_path))
+
     @Slot(str)
     def runTask(self, payload_json: str) -> None:
         if self._worker and self._worker.is_alive():
@@ -2300,6 +2364,42 @@ class WebBridge(QObject):
             path_to_id[str(path)] = row_id
         return rows, path_to_id
 
+    def _stage_plan(self, opt: ProcessOptions) -> list[tuple[int, str]]:
+        if opt.extract_only:
+            return [
+                (4, "process_stage_prepare"),
+                (12, "process_stage_demux"),
+                (70, "process_stage_finalize"),
+                (100, "process_stage_done"),
+            ]
+        plan: list[tuple[int, str]] = [
+            (4, "process_stage_prepare"),
+            (18, "process_stage_key_recovery"),
+            (38, "process_stage_demux"),
+            (62, "process_stage_decode"),
+        ]
+        if opt.mux_mkv:
+            plan.append((78, "process_stage_mux"))
+        plan.extend(
+            [
+                (90, "process_stage_finalize"),
+                (100, "process_stage_done"),
+            ]
+        )
+        return plan
+
+    def _emit_progress_stage_logs(
+        self,
+        file_name: str,
+        value: int,
+        stage_plan: list[tuple[int, str]],
+        announced: set[str],
+    ) -> None:
+        for threshold, key in stage_plan:
+            if value >= threshold and key not in announced:
+                self.logMessage.emit(self._t(key, file=file_name))
+                announced.add(key)
+
     def _run_job(self, config: dict) -> None:
         handler = _QtLogHandler(self.logMessage.emit)
         handler.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
@@ -2355,10 +2455,13 @@ class WebBridge(QObject):
             reports: list[dict] = []
             done_count = 0
             if use_parallel:
+                for path in files:
+                    self.logMessage.emit(self._t("process_queued", file=path.name))
                 with futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
                     fut_map = {executor.submit(process_one, str(path), opt): path for path in files}
                     for fut in futures.as_completed(fut_map):
                         path = fut_map[fut]
+                        self.logMessage.emit(self._t("process_completed", file=path.name))
                         try:
                             report = fut.result()
                         except UsmDivinerError as exc:
@@ -2391,6 +2494,9 @@ class WebBridge(QObject):
             else:
                 for path in files:
                     row_id = path_to_id.get(str(path), "")
+                    self.logMessage.emit(self._t("process_start_line", file=path.name))
+                    stage_plan = self._stage_plan(opt)
+                    announced_stage_logs: set[str] = set()
                     if row_id:
                         self.fileProgressUpdate.emit(
                             json.dumps({"id": row_id, "progress": 12}, ensure_ascii=False)
@@ -2400,11 +2506,19 @@ class WebBridge(QObject):
                             str(path),
                             opt,
                             progress_callback=(
-                                lambda value, _row_id=row_id: self.fileProgressUpdate.emit(
-                                    json.dumps(
-                                        {"id": _row_id, "progress": int(value)},
-                                        ensure_ascii=False,
-                                    )
+                                lambda value, _row_id=row_id, _file_name=path.name: (
+                                    self.fileProgressUpdate.emit(
+                                        json.dumps(
+                                            {"id": _row_id, "progress": int(value)},
+                                            ensure_ascii=False,
+                                        )
+                                    ),
+                                    self._emit_progress_stage_logs(
+                                        _file_name,
+                                        int(value),
+                                        stage_plan,
+                                        announced_stage_logs,
+                                    ),
                                 )
                             )
                             if row_id
@@ -2466,10 +2580,32 @@ def _summary_line(lang: str, report: dict) -> str:
 
 
 def _report_detail_lines(report: dict) -> list[str]:
-    if report.get("status") != "ok":
-        return []
-
     lines: list[str] = []
+    status = report.get("status")
+
+    crack = report.get("crack") or {}
+    if crack:
+        crack_items: list[str] = []
+        for key in ("reason", "bytes_scanned", "beam_size", "l1_beam_size", "candidates", "elapsed_ms"):
+            value = crack.get(key)
+            if value is not None and value != "":
+                crack_items.append(f"{key}={value}")
+        if crack_items:
+            lines.append("     crack: " + ", ".join(crack_items))
+
+    chunks = report.get("chunks") or {}
+    if chunks:
+        lines.append(
+            "     chunks: total={total}, video={video}, audio={audio}".format(
+                total=chunks.get("total", 0),
+                video=chunks.get("video", 0),
+                audio=chunks.get("audio", 0),
+            )
+        )
+
+    if status != "ok":
+        return lines
+
     if report.get("extract_only"):
         lines.append("     mode: extract-only")
     else:
