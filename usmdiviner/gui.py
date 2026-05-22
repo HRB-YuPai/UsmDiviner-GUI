@@ -2092,10 +2092,11 @@ HTML_TEMPLATE = """<!doctype html>
         let videoExportCandidates = [];
         let videoExportRows = new Map();
         let videoExportRunning = false;
-        let rowProgressFrame = null;
-        let overallProgressFrame = null;
+        let progressPumpTimer = null;
         let overallProgressCurrent = 0;
         let overallProgressTarget = 0;
+        let overallLastTick = 0;
+        let rowProgressModel = new Map();
         let isTaskRunning = false;
         let copyToastTimer = null;
         let lastLogLine = null;
@@ -2298,6 +2299,14 @@ HTML_TEMPLATE = """<!doctype html>
             const body = byId("file_table_body");
             const emptyOverlay = byId("file_table_empty");
             fileRows.clear();
+            rowProgressModel.clear();
+            if (progressPumpTimer !== null) {
+                window.clearTimeout(progressPumpTimer);
+                progressPumpTimer = null;
+            }
+            overallProgressCurrent = 0;
+            overallProgressTarget = 0;
+            overallLastTick = 0;
             body.innerHTML = "";
             if (!rows || !rows.length) {
                 const dict = t(currentLang());
@@ -2317,6 +2326,11 @@ HTML_TEMPLATE = """<!doctype html>
                 row.progressDisplay = Number(row.progress || 0);
                 row.progressTarget = Number(row.progress || 0);
                 fileRows.set(row.id, row);
+                rowProgressModel.set(row.id, {
+                    display: Number(row.progress || 0),
+                    target: Number(row.progress || 0),
+                    lastTick: 0,
+                });
                 const tr = document.createElement("tr");
                 tr.id = `row_${row.id}`;
                 tr.className = row.status === "ok" ? "ok" : row.status === "skipped" ? "warn" : row.status === "error" ? "err" : "pending";
@@ -2692,32 +2706,69 @@ HTML_TEMPLATE = """<!doctype html>
             renderPostProcessButtons();
         }
 
-        function animateTowards(current, target, factor = 0.2) {
+        function _advanceProgress(current, target, dtSec, urgency = 1) {
             const delta = target - current;
-            if (Math.abs(delta) < 0.2) return target;
-            return current + delta * factor;
+            if (Math.abs(delta) < 0.15) {
+                return target;
+            }
+            const speed = (12 + Math.min(60, Math.abs(delta) * 0.95)) * urgency;
+            const maxStep = Math.max(0.2, speed * dtSec);
+            if (delta > 0) {
+                return Math.min(target, current + maxStep);
+            }
+            return Math.max(target, current - maxStep);
         }
 
-        function _pumpRowProgress() {
-            rowProgressFrame = null;
-            let hasPending = false;
+        function _renderProgressImmediate(id, value) {
+            const safe = Math.max(0, Math.min(100, Number(value || 0)));
+            const fill = byId(`${id}_progress_fill`);
+            const text = byId(`${id}_progress_text`);
+            if (fill) fill.style.width = `${safe}%`;
+            if (text) text.textContent = `${Math.round(safe)}%`;
+        }
+
+        function _ensureProgressPump() {
+            if (progressPumpTimer !== null) {
+                return;
+            }
+            progressPumpTimer = window.setTimeout(_pumpProgress, 33);
+        }
+
+        function _pumpProgress() {
+            progressPumpTimer = null;
+            const now = Date.now();
+            let pendingRows = false;
+
             fileRows.forEach((row, id) => {
-                const target = Number(row.progressTarget ?? row.progress ?? 0);
-                const current = Number(row.progressDisplay ?? row.progress ?? 0);
-                const next = animateTowards(current, target, 0.24);
-                const fill = byId(`${id}_progress_fill`);
-                const text = byId(`${id}_progress_text`);
-                if (fill) fill.style.width = `${next}%`;
-                if (text) text.textContent = `${Math.round(next)}%`;
+                const model = rowProgressModel.get(id) || { display: Number(row.progress || 0), target: Number(row.progressTarget || row.progress || 0), lastTick: now };
+                const dtSec = Math.max(0.016, Math.min(0.2, (now - (model.lastTick || now)) / 1000));
+                const urgency = model.target >= 99 ? 3.2 : 1.0;
+                const next = _advanceProgress(Number(model.display || 0), Number(model.target || 0), dtSec, urgency);
+
+                model.display = next;
+                model.lastTick = now;
+                rowProgressModel.set(id, model);
+
                 row.progressDisplay = next;
-                row.progress = target;
+                row.progress = Number(model.target || 0);
                 fileRows.set(id, row);
-                if (Math.abs(target - next) >= 0.2) {
-                    hasPending = true;
+                _renderProgressImmediate(id, next);
+
+                if (Math.abs(Number(model.target || 0) - next) >= 0.15) {
+                    pendingRows = true;
                 }
             });
-            if (hasPending) {
-                rowProgressFrame = requestAnimationFrame(_pumpRowProgress);
+
+            const overallDtSec = Math.max(0.016, Math.min(0.2, (now - (overallLastTick || now)) / 1000));
+            overallLastTick = now;
+            const overallUrgency = overallProgressTarget >= 99 ? 3.0 : 1.25;
+            overallProgressCurrent = _advanceProgress(overallProgressCurrent, overallProgressTarget, overallDtSec, overallUrgency);
+            byId("overall_progress_fill").style.width = `${overallProgressCurrent}%`;
+            byId("overall_progress_value").textContent = `${Math.round(overallProgressCurrent)}%`;
+
+            const overallPending = Math.abs(overallProgressTarget - overallProgressCurrent) >= 0.15;
+            if (pendingRows || overallPending) {
+                _ensureProgressPump();
             }
         }
 
@@ -2725,33 +2776,38 @@ HTML_TEMPLATE = """<!doctype html>
             const value = Math.max(0, Math.min(100, Number(progress || 0)));
             const row = fileRows.get(id);
             if (!row) return;
+
             row.progressTarget = value;
             if (row.progressDisplay === undefined || row.progressDisplay === null) {
                 row.progressDisplay = Number(row.progress || 0);
             }
             fileRows.set(id, row);
-            if (!rowProgressFrame) {
-                rowProgressFrame = requestAnimationFrame(_pumpRowProgress);
-            }
-        }
 
-        function _pumpOverallProgress() {
-            overallProgressFrame = null;
-            overallProgressCurrent = animateTowards(overallProgressCurrent, overallProgressTarget, 0.22);
-            byId("overall_progress_fill").style.width = `${overallProgressCurrent}%`;
-            byId("overall_progress_value").textContent = `${Math.round(overallProgressCurrent)}%`;
-            if (Math.abs(overallProgressTarget - overallProgressCurrent) >= 0.2) {
-                overallProgressFrame = requestAnimationFrame(_pumpOverallProgress);
+            const model = rowProgressModel.get(id) || {
+                display: Number(row.progressDisplay || 0),
+                target: value,
+                lastTick: Date.now(),
+            };
+            model.target = value;
+            rowProgressModel.set(id, model);
+
+            if (value >= 100) {
+                model.display = 100;
+                _renderProgressImmediate(id, 100);
             }
+            _ensureProgressPump();
         }
 
         function setOverallProgress(done, total) {
             const t = Math.max(0, Number(total || 0));
             const d = Math.max(0, Math.min(t, Number(done || 0)));
             overallProgressTarget = t > 0 ? (d * 100) / t : 0;
-            if (!overallProgressFrame) {
-                overallProgressFrame = requestAnimationFrame(_pumpOverallProgress);
+            if (overallProgressTarget >= 100) {
+                overallProgressCurrent = 100;
+                byId("overall_progress_fill").style.width = "100%";
+                byId("overall_progress_value").textContent = "100%";
             }
+            _ensureProgressPump();
         }
 
         function renderVideoExportButton() {
@@ -5223,11 +5279,12 @@ class WebBridge(QObject):
 
     def _run_job(self, config: dict) -> None:
         handler = _QtLogHandler(self.logMessage.emit)
-        handler.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
-        root_logger = logging.getLogger()
-        old_level = root_logger.level
-        root_logger.setLevel(logging.INFO)
-        root_logger.addHandler(handler)
+        handler.setLevel(logging.DEBUG)
+        handler.setFormatter(logging.Formatter("[%(asctime)s][%(levelname)s][%(name)s] %(message)s", datefmt="%H:%M:%S"))
+        package_logger = logging.getLogger("usmdiviner")
+        old_package_level = package_logger.level
+        package_logger.setLevel(logging.DEBUG)
+        package_logger.addHandler(handler)
 
         try:
             input_path: Path = config["input_path"]
@@ -5295,12 +5352,72 @@ class WebBridge(QObject):
                 )
 
             reports: list[dict] = []
-            done_count = 0
+            progress_by_id = {row["id"]: 0 for row in rows}
+            progress_lock = threading.Lock()
+            progress_marks: dict[str, int] = {}
+
+            def emit_overall_from_rows() -> None:
+                with progress_lock:
+                    total_progress = sum(progress_by_id.values())
+                self.overallProgressUpdate.emit(
+                    json.dumps(
+                        {"done": total_progress / 100, "total": len(files)},
+                        ensure_ascii=False,
+                    )
+                )
+
+            def emit_row_progress(row_id: str, file_name: str, value: int) -> None:
+                safe_value = int(max(0, min(100, value)))
+                self.fileProgressUpdate.emit(
+                    json.dumps({"id": row_id, "progress": safe_value}, ensure_ascii=False)
+                )
+                with progress_lock:
+                    progress_by_id[row_id] = safe_value
+                mark = safe_value // 10
+                prev_mark = progress_marks.get(row_id, -1)
+                if mark > prev_mark:
+                    progress_marks[row_id] = mark
+                    self.logMessage.emit(f"[DEBUG] [{file_name}] progress={safe_value}%")
+                emit_overall_from_rows()
+
+            def make_progress_callback(
+                row_id: str,
+                file_name: str,
+                stage_plan: list[tuple[int, str]],
+                announced_stage_logs: set[str],
+            ):
+                def _callback(value: int) -> None:
+                    emit_row_progress(row_id, file_name, int(value))
+                    self._emit_progress_stage_logs(
+                        file_name,
+                        int(value),
+                        stage_plan,
+                        announced_stage_logs,
+                    )
+
+                return _callback
+
             if use_parallel:
                 for path in files:
                     self.logMessage.emit(self._t("process_queued", file=path.name))
-                with futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
-                    fut_map = {executor.submit(process_one, str(path), opt): path for path in files}
+                with futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    fut_map = {}
+                    for path in files:
+                        row_id = path_to_id.get(str(path), "")
+                        stage_plan = self._stage_plan(opt)
+                        announced_stage_logs: set[str] = set()
+                        if row_id:
+                            emit_row_progress(row_id, path.name, 6)
+                        self.logMessage.emit(self._t("process_start_line", file=path.name))
+                        fut = executor.submit(
+                            process_one,
+                            str(path),
+                            opt,
+                            make_progress_callback(row_id, path.name, stage_plan, announced_stage_logs)
+                            if row_id
+                            else None,
+                        )
+                        fut_map[fut] = path
                     for fut in futures.as_completed(fut_map):
                         path = fut_map[fut]
                         self.logMessage.emit(self._t("process_completed", file=path.name))
@@ -5316,20 +5433,8 @@ class WebBridge(QObject):
                                 self._reports_by_id[str(report["id"])] = dict(report)
                         reports.append(report)
                         if report["id"]:
-                            self.fileProgressUpdate.emit(
-                                json.dumps(
-                                    {"id": report["id"], "progress": 100},
-                                    ensure_ascii=False,
-                                )
-                            )
+                            emit_row_progress(report["id"], path.name, 100)
                         self.fileRowUpdate.emit(json.dumps(report, ensure_ascii=False))
-                        done_count += 1
-                        self.overallProgressUpdate.emit(
-                            json.dumps(
-                                {"done": done_count, "total": len(files)},
-                                ensure_ascii=False,
-                            )
-                        )
                         self.logMessage.emit(_summary_line(self._get_language(), report))
                         for detail in _report_detail_lines(report):
                             self.logMessage.emit(detail)
@@ -5340,38 +5445,12 @@ class WebBridge(QObject):
                     stage_plan = self._stage_plan(opt)
                     announced_stage_logs: set[str] = set()
                     if row_id:
-                        self.fileProgressUpdate.emit(
-                            json.dumps({"id": row_id, "progress": 12}, ensure_ascii=False)
-                        )
+                        emit_row_progress(row_id, path.name, 8)
                     try:
                         report = process_one(
                             str(path),
                             opt,
-                            progress_callback=(
-                                lambda value, _row_id=row_id, _file_name=path.name, _done=done_count: (
-                                    self.fileProgressUpdate.emit(
-                                        json.dumps(
-                                            {"id": _row_id, "progress": int(value)},
-                                            ensure_ascii=False,
-                                        )
-                                    ),
-                                    self._emit_progress_stage_logs(
-                                        _file_name,
-                                        int(value),
-                                        stage_plan,
-                                        announced_stage_logs,
-                                    ),
-                                    self.overallProgressUpdate.emit(
-                                        json.dumps(
-                                            {
-                                                "done": _done + (max(0, min(100, int(value))) / 100),
-                                                "total": len(files),
-                                            },
-                                            ensure_ascii=False,
-                                        )
-                                    ),
-                                )
-                            )
+                            progress_callback=make_progress_callback(row_id, path.name, stage_plan, announced_stage_logs)
                             if row_id
                             else None,
                         )
@@ -5385,23 +5464,15 @@ class WebBridge(QObject):
                             self._reports_by_id[str(report["id"])] = dict(report)
                     reports.append(report)
                     if report["id"]:
-                        self.fileProgressUpdate.emit(
-                            json.dumps(
-                                {"id": report["id"], "progress": 100},
-                                ensure_ascii=False,
-                            )
-                        )
+                        emit_row_progress(report["id"], path.name, 100)
                     self.fileRowUpdate.emit(json.dumps(report, ensure_ascii=False))
-                    done_count += 1
-                    self.overallProgressUpdate.emit(
-                        json.dumps(
-                            {"done": done_count, "total": len(files)},
-                            ensure_ascii=False,
-                        )
-                    )
                     self.logMessage.emit(_summary_line(self._get_language(), report))
                     for detail in _report_detail_lines(report):
                         self.logMessage.emit(detail)
+
+            self.overallProgressUpdate.emit(
+                json.dumps({"done": len(files), "total": len(files)}, ensure_ascii=False)
+            )
 
             ok = sum(1 for r in reports if r.get("status") == "ok")
             skipped = sum(1 for r in reports if r.get("status") == "skipped")
@@ -5420,8 +5491,8 @@ class WebBridge(QObject):
                 )
             )
         finally:
-            root_logger.removeHandler(handler)
-            root_logger.setLevel(old_level)
+            package_logger.removeHandler(handler)
+            package_logger.setLevel(old_package_level)
             self.runStateChanged.emit(False)
             self.logMessage.emit(self._t("end"))
 

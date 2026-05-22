@@ -60,21 +60,25 @@ def process_one(
     base = usm_path.stem
     out_dir = _make_output_dir(usm_path, opt)
     out_dir.mkdir(parents=True, exist_ok=True)
+    logger.debug("[%s] start process_one: extract_only=%s fast=%s mux_mkv=%s output=%s", usm_path.name, opt.extract_only, opt.fast, opt.mux_mkv, out_dir)
     _emit_progress(progress_callback, 4)
 
     if usm_path.stat().st_size == 0:
         raise KeyCrackError({"reason": "empty USM file"})
 
     if opt.extract_only:
+        logger.debug("[%s] extract-only mode enabled", usm_path.name)
         _emit_progress(progress_callback, 12)
         with usm_path.open("rb") as fp, mmap.mmap(fp.fileno(), 0, access=mmap.ACCESS_READ) as data:
             chunks = parse_usm_chunks(data)
+            logger.debug("[%s] parsed chunks: total=%s", usm_path.name, len(chunks))
             video_path, video_info, audio_paths, audio_info = _demux_raw_streams(
                 data,
                 chunks,
                 out_dir,
                 base,
             )
+        logger.debug("[%s] raw demux done: video=%s audio_channels=%s", usm_path.name, video_path, len(audio_paths))
         _emit_progress(progress_callback, 70)
         report = _build_extract_report(
             usm_path,
@@ -102,23 +106,29 @@ def process_one(
     if opt.manual_key is not None:
         key1, key2 = split_full_key(opt.manual_key)
         crack_stats = {"skipped": True, "reason": "manual key supplied"}
+        logger.debug("[%s] using manual key", usm_path.name)
         _emit_progress(progress_callback, 28)
     else:
         _emit_progress(progress_callback, 18)
         try:
             key1, key2, crack_stats = _crack_key(usm_path, opt.fast)
         except KeyCrackError as exc:
+            logger.debug("[%s] key crack skipped: %s", usm_path.name, exc.args[0])
             _emit_progress(progress_callback, 100)
             return _skip_report(usm_path, out_dir, crack_stats=exc.args[0], opt=opt)
+        logger.debug("[%s] key crack done: key1=%s key2=%s stats=%s", usm_path.name, key1.hex().upper(), key2.hex().upper(), crack_stats)
         _emit_progress(progress_callback, 38)
 
     video_mask1, video_mask2, audio_mask = make_masks(key1, key2)
 
     with usm_path.open("rb") as fp, mmap.mmap(fp.fileno(), 0, access=mmap.ACCESS_READ) as data:
         chunks = parse_usm_chunks(data)
+        logger.debug("[%s] parsed chunks: total=%s video=%s audio=%s", usm_path.name, len(chunks), sum(1 for c in chunks if c.signature == SIG_SFV and c.data_type == 0), sum(1 for c in chunks if c.signature == SIG_SFA and c.data_type == 0))
         audio_payloads = _collect_audio_probe_payloads(data, chunks)
+        logger.debug("[%s] collected probe payloads for channels=%s", usm_path.name, sorted(audio_payloads.keys()))
 
         vgmstream = find_vgmstream(opt.vgmstream)
+        logger.debug("[%s] vgmstream resolved: %s", usm_path.name, vgmstream)
         audio_decisions: dict[int, AudioDecision] = {}
         for ch, payloads in audio_payloads.items():
             decision, _ = decide_audio_for_channel(
@@ -131,6 +141,7 @@ def process_one(
                 opt.adx_audio_mask,
             )
             audio_decisions[ch] = decision
+            logger.debug("[%s] audio decision ch%s: format=%s use_mask=%s confidence=%s reason=%s", usm_path.name, ch, decision.format, decision.use_audio_mask, decision.confidence, decision.reason)
 
         video_path, video_info, audio_paths = _demux_streams(
             data,
@@ -142,9 +153,11 @@ def process_one(
             audio_mask,
             audio_decisions,
         )
+    logger.debug("[%s] demux done: video=%s video_fmt=%s audio_files=%s", usm_path.name, video_path, video_info.get("format"), len(audio_paths))
     _emit_progress(progress_callback, 62)
 
     decoded = _decode_audio(audio_paths, audio_decisions, vgmstream, key1, key2)
+    logger.debug("[%s] decode summary: decoded_channels=%s", usm_path.name, sum(1 for d in decoded.values() if d.get("ok")))
     _emit_progress(progress_callback, 78)
     mkv_path = _make_mkv_path(usm_path, opt)
     mp4_path = _make_mp4_path(usm_path, opt)
@@ -157,6 +170,7 @@ def process_one(
         mkv_path,
         mp4_path,
     )
+    logger.debug("[%s] mux summary: success=%s report=%s", usm_path.name, mux_success, mux_report)
     _cleanup_outputs(
         mux_success,
         opt.keep_intermediate_audio,
@@ -167,6 +181,7 @@ def process_one(
     )
     _cleanup_empty_mux_dir(opt, mux_success, out_dir)
     _clear_removed_paths(mux_success, opt.keep_intermediate_audio, decoded)
+    logger.debug("[%s] cleanup done: mux_success=%s keep_audio=%s", usm_path.name, mux_success, opt.keep_intermediate_audio)
     _emit_progress(progress_callback, 90)
 
     report = _build_report(
@@ -193,9 +208,11 @@ def process_one(
         )
         report["report_written"] = True
         report["report_path"] = str(report_path)
+        logger.debug("[%s] report written: %s", usm_path.name, report_path)
     else:
         report["report_written"] = False
         report["report_path"] = None
+    logger.debug("[%s] process_one done", usm_path.name)
     _emit_progress(progress_callback, 100)
     return report
 
@@ -261,6 +278,7 @@ def _make_output_dir(usm_path: Path, opt: ProcessOptions) -> Path:
 
 
 def _crack_key(usm_path: Path, fast: bool) -> tuple[bytes, bytes, dict]:
+    logger.debug("[%s] crack start: fast=%s beam=%s l1_beam=%s", usm_path.name, fast, SOLVER_BEAM, SOLVER_L1_BEAM)
     key1, key2, crack_stats = crack_keys_from_usm(
         usm_path,
         max_video_bytes=FAST_CRACK_VIDEO_BYTES if fast else None,
@@ -342,6 +360,7 @@ def _demux_streams(
     audio_mask: bytes,
     audio_decisions: dict[int, AudioDecision],
 ) -> tuple[Path | None, dict, dict[int, Path]]:
+    logger.debug("demux start: out_dir=%s base=%s decisions=%s", out_dir, base, {ch: {"format": d.format, "mask": d.use_audio_mask} for ch, d in audio_decisions.items()})
     temp_video_path = out_dir / f"{base}.video.tmp"
     audio_fps: dict[int, object] = {}
     audio_paths: dict[int, Path] = {}
@@ -372,6 +391,7 @@ def _demux_streams(
                 fp.close()
 
     video_path, video_info = _finalize_video_temp(temp_video_path, out_dir, base)
+    logger.debug("demux end: video=%s info=%s audio_channels=%s", video_path, video_info, len(audio_paths))
     return video_path, video_info, audio_paths
 
 
@@ -450,9 +470,12 @@ def _decode_audio(
     decoded: dict[int, dict] = {}
     for ch, audio_path in audio_paths.items():
         decision = audio_decisions[ch]
+        logger.debug("decode start ch%s: path=%s format=%s", ch, audio_path, decision.format)
         if decision.format == "hca":
             write_hcakey_file(audio_path, key1, key2)
+            logger.debug("decode ch%s: wrote hcakey file", ch)
         if not vgmstream:
+            logger.debug("decode ch%s: skipped, vgmstream missing", ch)
             continue
         wav_path = audio_path.with_suffix(".wav")
         try:
@@ -462,6 +485,7 @@ def _decode_audio(
             decoded[ch] = {"ok": False, "wav": None, "log_tail": str(exc)}
             continue
         decoded[ch] = {"ok": ok, "wav": str(wav_path) if ok else None, "log_tail": log[-1000:]}
+        logger.debug("decode end ch%s: ok=%s wav=%s", ch, ok, decoded[ch].get("wav"))
     return decoded
 
 
@@ -474,6 +498,7 @@ def _maybe_mux(
     mkv_path: Path,
     mp4_path: Path,
 ) -> tuple[dict | None, bool]:
+    logger.debug("mux start: enabled=%s video=%s", opt.mux_mkv, video_path)
     if not opt.mux_mkv:
         return None, False
     if not video_path:
@@ -493,6 +518,7 @@ def _maybe_mux(
             mux_audio_inputs.append(audio_path)
 
     ffmpeg = find_ffmpeg(opt.ffmpeg)
+    logger.debug("mux ffmpeg=%s audio_inputs=%s", ffmpeg, [str(p) for p in mux_audio_inputs])
     if not ffmpeg:
         return {"ok": False, "mkv": None, "mp4": None, "log_tail": "ffmpeg not found"}, False
 
