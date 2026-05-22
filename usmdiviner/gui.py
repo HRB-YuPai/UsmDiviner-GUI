@@ -6,6 +6,7 @@ import logging
 import os
 import threading
 from pathlib import Path
+from typing import Any
 
 from PySide6.QtCore import QObject, Signal, Slot, QUrl
 from PySide6.QtWebChannel import QWebChannel
@@ -26,6 +27,14 @@ ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
 LANG_DIR = ASSETS_DIR / "i18n"
 FONT_PATH = ASSETS_DIR / "fonts" / "zh-cn.ttf"
 SUPPORTED_LANGUAGES = ("zh-CN", "zh-TW", "en")
+SYNC_TEMPLATE_CANDIDATES = (
+    ASSETS_DIR / "usm_template" / "versions_template.json",
+    ASSETS_DIR / "versions_reference.json",
+    ASSETS_DIR / "versions_template.json",
+    ASSETS_DIR / "key_template_versions.json",
+    Path.cwd() / "versions_reference.json",
+    Path.cwd() / "versions_template.json",
+)
 
 
 def _load_translations() -> dict[str, dict[str, str]]:
@@ -342,6 +351,7 @@ HTML_TEMPLATE = """<!doctype html>
             color: var(--fg);
             font-size: 12px;
             outline: none;
+            font-family: "UsmDivinerZh", "Segoe UI", "Noto Sans", "Microsoft YaHei", "PingFang TC", sans-serif;
         }
 
         input[type="text"]:focus {
@@ -642,26 +652,34 @@ HTML_TEMPLATE = """<!doctype html>
         }
 
         .table-wrap::-webkit-scrollbar,
-        .log-box::-webkit-scrollbar {
+        .log-box::-webkit-scrollbar,
+        .blk-preview::-webkit-scrollbar,
+        .sync-result-text::-webkit-scrollbar {
             width: 12px;
             height: 12px;
         }
 
         .table-wrap::-webkit-scrollbar-track,
-        .log-box::-webkit-scrollbar-track {
+        .log-box::-webkit-scrollbar-track,
+        .blk-preview::-webkit-scrollbar-track,
+        .sync-result-text::-webkit-scrollbar-track {
             background: var(--scroll-track);
             border-radius: 999px;
         }
 
         .table-wrap::-webkit-scrollbar-thumb,
-        .log-box::-webkit-scrollbar-thumb {
+        .log-box::-webkit-scrollbar-thumb,
+        .blk-preview::-webkit-scrollbar-thumb,
+        .sync-result-text::-webkit-scrollbar-thumb {
             background: var(--scroll-thumb);
             border-radius: 999px;
             border: 2px solid var(--scroll-track);
         }
 
         .table-wrap::-webkit-scrollbar-button,
-        .log-box::-webkit-scrollbar-button {
+        .log-box::-webkit-scrollbar-button,
+        .blk-preview::-webkit-scrollbar-button,
+        .sync-result-text::-webkit-scrollbar-button {
             width: 0;
             height: 0;
             display: none;
@@ -740,9 +758,53 @@ HTML_TEMPLATE = """<!doctype html>
             padding: 10px;
             white-space: pre-wrap;
             overflow: auto;
-            font-family: Consolas, Courier New, monospace;
+            font-family: "UsmDivinerZh", "Segoe UI", "Noto Sans", "Microsoft YaHei", "PingFang TC", sans-serif;
             font-size: 12px;
             line-height: 1.4;
+        }
+
+        .sync-result-card {
+            width: min(860px, 92vw);
+            height: min(560px, 78vh);
+        }
+
+        #sync_result_modal .modal-head {
+            justify-content: center;
+        }
+
+        #sync_result_modal .modal-head > span {
+            width: 100%;
+            text-align: center;
+        }
+
+        .sync-result-body {
+            flex: 1;
+            padding: 12px 14px;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .sync-result-note {
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .sync-result-text {
+            width: 100%;
+            flex: 1;
+            min-height: 0;
+            resize: none;
+            border-radius: 10px;
+            border: 1px solid var(--line);
+            background: var(--surface);
+            color: var(--fg);
+            padding: 10px;
+            font-family: "UsmDivinerZh", "Segoe UI", "Noto Sans", "Microsoft YaHei", "PingFang TC", sans-serif;
+            font-size: 12px;
+            line-height: 1.45;
+            outline: none;
         }
 
         .log-box.empty {
@@ -777,10 +839,173 @@ HTML_TEMPLATE = """<!doctype html>
             min-height: 0;
         }
 
-        .blk-summary {
+        .blk-summary-row {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 8px;
+        }
+
+        .blk-search {
+            display: flex;
+            align-items: center;
+            gap: 0;
+            flex-shrink: 0;
+        }
+
+        .blk-search-input-wrap {
+            position: relative;
+            display: inline-flex;
+            align-items: center;
+            flex-shrink: 0;
+            border: 1px solid var(--input-border);
+            border-radius: 8px;
+            background: var(--input-bg);
+            overflow: visible;
+        }
+
+        .blk-search-input {
+            flex: 1;
+            min-width: 80px;
+            padding: 6px 8px;
+            border: none;
+            background: transparent;
+            color: var(--fg);
+            font-size: 12px;
+            outline: none;
+        }
+
+        .blk-search-input:focus {
+            box-shadow: none;
+        }
+
+        .blk-search-input-wrap:focus-within {
+            border-color: var(--acc);
+            box-shadow: 0 0 0 3px var(--focus-ring);
+        }
+
+        .blk-search-input::placeholder {
+            color: var(--muted);
+            opacity: 0.78;
+            font-family: "UsmDivinerZh", "Segoe UI", "Noto Sans", "Microsoft YaHei", "PingFang TC", sans-serif;
+        }
+
+        .blk-search-btn {
+            padding: 6px 10px;
+            font-size: 11px;
+            min-width: 58px;
+        }
+
+        .blk-search-nav-btn {
+            padding: 5px 8px;
+            font-size: 11px;
+            min-width: 30px;
+            border: none;
+            border-radius: 0;
+            border-left: 1px solid var(--line);
+            background: transparent;
+            font-weight: 700;
+        }
+
+        .blk-search-status {
+            min-width: 64px;
+            text-align: center;
+            color: var(--muted);
+            font-size: 11px;
+            font-family: Consolas, Courier New, monospace;
+        }
+
+        .blk-search-status-inline {
+            flex-shrink: 0;
+            min-width: 44px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--muted);
+            font-size: 11px;
+            font-family: "UsmDivinerZh", "Segoe UI", "Noto Sans", "Microsoft YaHei", "PingFang TC", sans-serif;
+            font-variant-numeric: tabular-nums;
+            padding: 0 6px;
+            white-space: nowrap;
+            pointer-events: none;
+            border-left: 1px solid var(--line);
+        }
+
+        .blk-search-controls {
+            display: inline-flex;
+            align-items: stretch;
+            flex-shrink: 0;
+            background: transparent;
+        }
+
+        .blk-search-toggle-btn {
+            padding: 5px 8px;
+            min-width: 32px;
+            border: none;
+            border-left: 1px solid var(--line);
+            border-radius: 0;
+            background: transparent;
+            font-size: 11px;
+            font-weight: 700;
+        }
+
+        .blk-search-toggle-btn.active {
+            background: var(--focus-ring);
+            color: var(--fg);
+        }
+
+        .blk-search-clear-btn {
+            padding: 5px 8px;
+            min-width: 30px;
+            border: none;
+            border-left: 1px solid var(--line);
+            border-radius: 0;
+            background: transparent;
+            font-size: 13px;
+            font-weight: 700;
+            line-height: 1;
+        }
+
+        .blk-search-hit {
+            background: #c99a2a44;
+            color: var(--fg);
+            border-radius: 3px;
+            padding: 0 1px;
+        }
+
+        .blk-search-hit-active {
+            background: #e3b74988;
+            outline: 1px solid #e3b749;
+        }
+
+        #blk_versions_modal .modal-head {
+            justify-content: center;
+            flex-direction: column;
+            align-items: center;
+            gap: 2px;
+        }
+
+        #blk_versions_modal .modal-head > span {
+            width: 100%;
+            text-align: center;
+        }
+
+        .blk-head-line {
+            width: 100%;
             color: var(--muted);
             font-size: 12px;
-            line-height: 1.45;
+            line-height: 1.35;
+            text-align: center;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            user-select: none;
+            -webkit-user-select: none;
+            -ms-user-select: none;
+        }
+
+        #blk_versions_summary {
+            margin-top: 6px;
         }
 
         .blk-preview {
@@ -793,7 +1018,7 @@ HTML_TEMPLATE = """<!doctype html>
             padding: 12px;
             white-space: pre;
             overflow: auto;
-            font-family: Consolas, Courier New, monospace;
+            font-family: "UsmDivinerZh", "Segoe UI", "Noto Sans", "Microsoft YaHei", "PingFang TC", sans-serif;
             font-size: 12px;
             line-height: 1.45;
             min-height: 0;
@@ -1279,20 +1504,51 @@ HTML_TEMPLATE = """<!doctype html>
         <div class="modal-card blk-modal-card">
             <div class="modal-head">
                 <span id="blk_versions_title">versions.json</span>
-                <button class="btn" id="blk_versions_close_x" onclick="closeBlkVersionsModal()">Close</button>
+                <div class="blk-head-line" id="blk_versions_summary">No versions.json data available.</div>
+                <div class="blk-head-line" id="blk_versions_path">BLK path: —</div>
             </div>
             <div class="blk-modal-body">
-                <div class="blk-summary" id="blk_versions_summary">No versions.json data available.</div>
+                <div class="blk-summary-row">
+                    <div class="blk-search">
+                        <div class="blk-search-input-wrap">
+                            <input id="blk_search_input" class="blk-search-input" type="text" placeholder="Search text" oninput="onBlkSearchInput()" onkeydown="handleBlkSearchKey(event)" />
+                            <span class="blk-search-status-inline" id="blk_search_status">0/0</span>
+                            <div class="blk-search-controls">
+                                <button class="btn blk-search-toggle-btn" id="blk_search_case_btn" onclick="toggleBlkSearchCase()" data-tooltip="Match case">Aa</button>
+                                <button class="btn blk-search-toggle-btn" id="blk_search_word_btn" onclick="toggleBlkSearchWholeWord()" data-tooltip="Match whole word">W</button>
+                                <button class="btn blk-search-nav-btn" id="blk_search_prev_btn" onclick="focusPrevBlkSearchHit()" data-tooltip="Previous match">↑</button>
+                                <button class="btn blk-search-nav-btn" id="blk_search_next_btn" onclick="focusNextBlkSearchHit()" data-tooltip="Next match">↓</button>
+                                <button class="btn blk-search-clear-btn" id="blk_search_clear_btn" onclick="resetBlkSearch()" data-tooltip="Clear search">×</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
                 <pre id="blk_versions_box" class="blk-preview"></pre>
             </div>
             <div class="modal-actions">
                 <button class="btn" id="blk_versions_copy_btn" onclick="copyBlkVersions()">Copy</button>
+                <button class="btn" id="blk_versions_sync_btn" onclick="syncBlkKeysFromUsmRows()">Sync Keys</button>
                 <button class="btn" id="blk_versions_close_btn" onclick="closeBlkVersionsModal()">Close</button>
             </div>
         </div>
     </div>
 
     <div id="copy_toast" class="copy-toast"></div>
+
+    <div id="sync_result_modal" class="modal hidden">
+        <div class="modal-card sync-result-card">
+            <div class="modal-head">
+                <span id="sync_result_title">Sync Result</span>
+            </div>
+            <div class="sync-result-body">
+                <div id="sync_result_note" class="sync-result-note"></div>
+                <textarea id="sync_result_text" class="sync-result-text" readonly></textarea>
+            </div>
+            <div class="modal-actions">
+                <button class="btn" id="sync_result_close_btn" onclick="closeSyncResultModal()">Close</button>
+            </div>
+        </div>
+    </div>
 
     <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
     <script>
@@ -1301,6 +1557,11 @@ HTML_TEMPLATE = """<!doctype html>
         let fileRows = new Map();
         let logLines = [];
         let blkVersionsData = null;
+        let blkSearchQuery = "";
+        let blkSearchCaseSensitive = false;
+        let blkSearchWholeWord = false;
+        let blkSearchMatches = [];
+        let blkSearchIndex = -1;
         let blkParsePending = false;
         let copyToastTimer = null;
         let lastLogLine = null;
@@ -1330,10 +1591,66 @@ HTML_TEMPLATE = """<!doctype html>
             if (el) el.placeholder = text;
         }
 
+        function setTooltip(id, text) {
+            const el = byId(id);
+            if (!el) return;
+            el.setAttribute("data-tooltip", text || "");
+            el.setAttribute("aria-label", text || "");
+            el.removeAttribute("title");
+        }
+
         function blkEntryCount(value) {
             if (Array.isArray(value)) return value.length;
             if (value && typeof value === "object") return Object.keys(value).length;
             return 0;
+        }
+
+        function extractBlkGameVersion() {
+            const normalizeVersion = (value) => {
+                const raw = String(value || "").trim();
+                if (!raw) return "";
+                const parts = raw.split(".").filter((p) => p.length > 0);
+                if (parts.length === 2) return `${parts[0]}.${parts[1]}.0`;
+                return raw;
+            };
+
+            const list = Array.isArray(blkVersionsData && blkVersionsData.versions_list)
+                ? blkVersionsData.versions_list
+                : [];
+            for (let i = list.length - 1; i >= 0; i -= 1) {
+                const item = list[i];
+                if (!item || typeof item !== "object") continue;
+                const versionValue = String(item.version || "").trim();
+                if (versionValue) return normalizeVersion(versionValue);
+            }
+
+            // Fallback: parse the full JSON payload and scan recursively.
+            const raw = String(blkVersionsData && blkVersionsData.versions_json || "");
+            if (!raw || raw === "null") return "—";
+            try {
+                const decoded = JSON.parse(raw);
+                let lastVersion = "";
+                const walk = (node) => {
+                    if (!node) return;
+                    if (Array.isArray(node)) {
+                        for (const entry of node) walk(entry);
+                        return;
+                    }
+                    if (typeof node !== "object") return;
+                    if (Object.prototype.hasOwnProperty.call(node, "version")) {
+                        const v = String(node.version || "").trim();
+                        if (v) lastVersion = v;
+                    }
+                    for (const key of Object.keys(node)) {
+                        walk(node[key]);
+                    }
+                };
+                walk(decoded);
+                if (lastVersion) return normalizeVersion(lastVersion);
+                return "—";
+            } catch (_) {
+                return "—";
+            }
         }
 
         function formatBytes(bytes) {
@@ -1426,7 +1743,7 @@ HTML_TEMPLATE = """<!doctype html>
             }
             if (status === "ok" || status === "skipped" || status === "error") {
                 const dict = t(currentLang());
-                cell.innerHTML = `<button class="btn mini-btn" title="${dict.save_report_tooltip}" onclick="saveReportForRow('${id}')">${dict.save_report}</button>`;
+                cell.innerHTML = `<button class="btn mini-btn" data-tooltip="${dict.save_report_tooltip}" aria-label="${dict.save_report_tooltip}" onclick="saveReportForRow('${id}')">${dict.save_report}</button>`;
             } else {
                 cell.textContent = "—";
             }
@@ -1476,6 +1793,23 @@ HTML_TEMPLATE = """<!doctype html>
                 el.classList.remove("show");
                 copyToastTimer = null;
             }, 1200);
+        }
+
+        function openSyncResultModal(note, text) {
+            const noteEl = byId("sync_result_note");
+            const textEl = byId("sync_result_text");
+            if (noteEl) noteEl.textContent = String(note || "");
+            if (textEl) textEl.value = String(text || "");
+            byId("sync_result_modal").classList.remove("hidden");
+        }
+
+        function closeSyncResultModal() {
+            byId("sync_result_modal").classList.add("hidden");
+        }
+
+        function onSyncResultReady(content) {
+            const dict = t(currentLang());
+            openSyncResultModal(dict.blk_sync_popup_note || "", content || dict.blk_sync_popup_empty || "");
         }
 
         function initColumnResizers() {
@@ -1632,22 +1966,40 @@ HTML_TEMPLATE = """<!doctype html>
             setText("blk_pick_btn", dict.btn_blk_load);
             setText("open_versions_btn", dict.btn_view_versions);
             setText("blk_versions_title", dict.blk_versions_title);
-            setText("blk_versions_close_x", dict.close);
             setText("blk_versions_copy_btn", dict.blk_versions_copy);
+            setText("blk_versions_sync_btn", dict.blk_versions_sync);
             setText("blk_versions_close_btn", dict.close);
+            setText("sync_result_title", dict.blk_sync_popup_title || dict.blk_versions_sync);
+            setText("sync_result_close_btn", dict.close);
+            setText("sync_result_note", dict.blk_sync_popup_note || "");
             setPlaceholder("output", dict.placeholder_output);
             setPlaceholder("report_output", dict.placeholder_report_output);
             setPlaceholder("blk_input", dict.placeholder_blk_input);
-            byId("input_pick_btn").setAttribute("data-tooltip", dict.btn_input_pick_tooltip);
-            byId("output_pick_btn").setAttribute("data-tooltip", dict.btn_output_pick_tooltip);
-            byId("report_pick_btn").setAttribute("data-tooltip", dict.btn_report_pick_tooltip);
-            byId("blk_pick_btn").setAttribute("data-tooltip", dict.btn_blk_pick_tooltip);
+            setPlaceholder("blk_search_input", dict.blk_search_placeholder);
+            setTooltip("blk_search_case_btn", dict.blk_search_match_case);
+            setTooltip("blk_search_word_btn", dict.blk_search_match_whole);
+            setTooltip("blk_search_prev_btn", dict.blk_search_prev_tooltip);
+            setTooltip("blk_search_next_btn", dict.blk_search_next_tooltip);
+            setTooltip("blk_search_clear_btn", dict.blk_search_clear_tooltip);
+            setTooltip("input_pick_btn", dict.btn_input_pick_tooltip);
+            setTooltip("output_pick_btn", dict.btn_output_pick_tooltip);
+            setTooltip("report_pick_btn", dict.btn_report_pick_tooltip);
+            setTooltip("blk_pick_btn", dict.btn_blk_pick_tooltip);
+            setTooltip("open_versions_btn", dict.btn_view_versions_tooltip);
             setText("settings_title", dict.settings_title);
             setText("settings_ok_btn", dict.settings_ok);
             setText("settings_cancel_btn", dict.settings_cancel);
-            byId("open_settings_btn").setAttribute("data-tooltip", dict.settings_title);
-            byId("open_log_btn").setAttribute("data-tooltip", dict.btn_logs_tooltip);
-            byId("run").setAttribute("data-tooltip", dict.btn_run_tooltip);
+            setTooltip("open_settings_btn", dict.btn_settings_tooltip);
+            setTooltip("open_log_btn", dict.btn_logs_tooltip);
+            setTooltip("run", dict.btn_run_tooltip);
+            setTooltip("export_log_btn", dict.btn_export_log_tooltip);
+            setTooltip("clear_log_btn", dict.btn_clear_log_tooltip);
+            setTooltip("close_log_btn", dict.btn_close_log_tooltip);
+            setTooltip("settings_ok_btn", dict.btn_settings_ok_tooltip);
+            setTooltip("settings_cancel_btn", dict.btn_settings_cancel_tooltip);
+            setTooltip("blk_versions_copy_btn", dict.btn_blk_versions_copy_tooltip);
+            setTooltip("blk_versions_sync_btn", dict.btn_blk_versions_sync_tooltip);
+            setTooltip("blk_versions_close_btn", dict.btn_blk_versions_close_tooltip);
             byId("open_settings_btn").textContent = dict.settings_title;
             byId("open_log_btn").textContent = dict.open_log;
             byId("run").textContent = dict.run;
@@ -1665,6 +2017,7 @@ HTML_TEMPLATE = """<!doctype html>
             updateManualKeyVisibility();
             renderBlkStatus();
             renderBlkModal();
+            updateBlkSearchStatus();
             renderLogBox();
             initColumnResizers();
         }
@@ -1815,24 +2168,218 @@ HTML_TEMPLATE = """<!doctype html>
 
         function renderBlkModal() {
             const summary = byId("blk_versions_summary");
+            const summaryPath = byId("blk_versions_path");
             const box = byId("blk_versions_box");
             const dict = t(currentLang());
-            if (!summary || !box) return;
+            const blkPathEl = byId("blk_input");
+            const blkPath = blkPathEl ? blkPathEl.value : "";
+            if (!summary || !summaryPath || !box) return;
             if (!blkVersionsData || !blkVersionsData.versions_json || blkVersionsData.versions_json === "null") {
                 summary.textContent = dict.blk_versions_modal_empty;
+                summaryPath.textContent = dict.blk_versions_modal_path
+                    .replace("{path}", String(blkPath || "—"));
                 box.textContent = "";
+                blkSearchMatches = [];
+                blkSearchIndex = -1;
+                updateBlkSearchStatus();
                 return;
             }
             const count = blkEntryCount(blkVersionsData.versions_list);
             const source = blkVersionsData.versions ? blkVersionsData.versions.source : null;
             const kind = blkVersionsData.versions ? blkVersionsData.versions.kind : null;
             const offset = blkVersionsData.versions ? blkVersionsData.versions.offset : null;
+            const gameVersion = extractBlkGameVersion();
             summary.textContent = dict.blk_versions_modal_summary
                 .replace("{count}", String(count))
                 .replace("{source}", String(source || "—"))
                 .replace("{kind}", String(kind || "—"))
-                .replace("{offset}", String(offset === null || offset === undefined ? "—" : offset));
-            box.textContent = blkVersionsData.versions_json;
+                .replace("{offset}", String(offset === null || offset === undefined ? "—" : offset))
+                .replace("{game_version}", String(gameVersion || "—"));
+            summaryPath.textContent = dict.blk_versions_modal_path
+                .replace("{path}", String(blkPath || "—"));
+            const raw = String(blkVersionsData.versions_json || "");
+            if (!blkSearchQuery) {
+                box.textContent = raw;
+                blkSearchMatches = [];
+                blkSearchIndex = -1;
+                updateBlkSearchStatus();
+                return;
+            }
+            const highlighted = highlightMatches(raw, blkSearchQuery);
+            box.innerHTML = highlighted.html;
+            blkSearchMatches = Array.from(box.querySelectorAll("mark.blk-search-hit"));
+            if (blkSearchMatches.length <= 0) {
+                blkSearchIndex = -1;
+                updateBlkSearchStatus();
+                return;
+            }
+            if (blkSearchIndex < 0 || blkSearchIndex >= blkSearchMatches.length) {
+                blkSearchIndex = 0;
+            }
+            focusBlkSearchHit(blkSearchIndex);
+        }
+
+        function updateBlkSearchStatus() {
+            const status = byId("blk_search_status");
+            const prevBtn = byId("blk_search_prev_btn");
+            const nextBtn = byId("blk_search_next_btn");
+            const clearBtn = byId("blk_search_clear_btn");
+            const caseBtn = byId("blk_search_case_btn");
+            const wordBtn = byId("blk_search_word_btn");
+            const input = byId("blk_search_input");
+            const hasQueryText = String(input ? input.value : (blkSearchQuery || "")).length > 0;
+            if (status) {
+                if (!blkSearchQuery || blkSearchMatches.length <= 0 || blkSearchIndex < 0) {
+                    status.textContent = "0/0";
+                } else {
+                    status.textContent = `${blkSearchIndex + 1}/${blkSearchMatches.length}`;
+                }
+            }
+            const hasHits = blkSearchMatches.length > 0 && blkSearchIndex >= 0;
+            if (prevBtn) prevBtn.disabled = !hasHits;
+            if (nextBtn) nextBtn.disabled = !hasHits;
+            if (clearBtn) clearBtn.disabled = !hasQueryText;
+            if (caseBtn) caseBtn.classList.toggle("active", blkSearchCaseSensitive);
+            if (wordBtn) wordBtn.classList.toggle("active", blkSearchWholeWord);
+        }
+
+        function focusBlkSearchHit(index) {
+            if (blkSearchMatches.length <= 0) {
+                blkSearchIndex = -1;
+                updateBlkSearchStatus();
+                return;
+            }
+            const safeIndex = ((index % blkSearchMatches.length) + blkSearchMatches.length) % blkSearchMatches.length;
+            blkSearchIndex = safeIndex;
+            blkSearchMatches.forEach((el) => el.classList.remove("blk-search-hit-active"));
+            const active = blkSearchMatches[safeIndex];
+            if (active) {
+                active.classList.add("blk-search-hit-active");
+                active.scrollIntoView({ block: "center" });
+            }
+            updateBlkSearchStatus();
+        }
+
+        function escapeHtml(text) {
+            return String(text || "")
+                .replaceAll("&", "&amp;")
+                .replaceAll("<", "&lt;")
+                .replaceAll(">", "&gt;")
+                .replaceAll('"', "&quot;")
+                .replaceAll("'", "&#39;");
+        }
+
+        function isBlkWordChar(ch) {
+            return /[0-9A-Za-z_]/.test(String(ch || ""));
+        }
+
+        function findBlkSearchMatches(source, query) {
+            const text = String(source || "");
+            const needleRaw = String(query || "");
+            if (!needleRaw) return [];
+
+            const haystack = blkSearchCaseSensitive ? text : text.toLowerCase();
+            const needle = blkSearchCaseSensitive ? needleRaw : needleRaw.toLowerCase();
+            const matches = [];
+            let cursor = 0;
+
+            while (cursor <= haystack.length - needle.length) {
+                const found = haystack.indexOf(needle, cursor);
+                if (found < 0) break;
+                const end = found + needle.length;
+
+                if (blkSearchWholeWord) {
+                    const left = found <= 0 ? "" : text.charAt(found - 1);
+                    const right = end >= text.length ? "" : text.charAt(end);
+                    const leftOk = !isBlkWordChar(left);
+                    const rightOk = !isBlkWordChar(right);
+                    if (!leftOk || !rightOk) {
+                        cursor = found + 1;
+                        continue;
+                    }
+                }
+
+                matches.push({ start: found, end });
+                cursor = found + Math.max(needle.length, 1);
+            }
+
+            return matches;
+        }
+
+        function highlightMatches(raw, query) {
+            const source = String(raw || "");
+            const ranges = findBlkSearchMatches(source, query);
+            if (ranges.length <= 0) {
+                return { html: escapeHtml(source), count: 0 };
+            }
+            const parts = [];
+            let cursor = 0;
+            for (const range of ranges) {
+                parts.push(escapeHtml(source.slice(cursor, range.start)));
+                parts.push(`<mark class="blk-search-hit">${escapeHtml(source.slice(range.start, range.end))}</mark>`);
+                cursor = range.end;
+            }
+            parts.push(escapeHtml(source.slice(cursor)));
+            return { html: parts.join(""), count: ranges.length };
+        }
+
+        function onBlkSearchInput() {
+            const input = byId("blk_search_input");
+            blkSearchQuery = (input ? input.value : "");
+            blkSearchIndex = -1;
+            renderBlkModal();
+        }
+
+        function handleBlkSearchKey(event) {
+            if (!event || event.key !== "Enter") return;
+            event.preventDefault();
+            if (blkSearchMatches.length <= 0) {
+                onBlkSearchInput();
+                return;
+            }
+            if (event.shiftKey) {
+                focusPrevBlkSearchHit();
+            } else {
+                focusNextBlkSearchHit();
+            }
+        }
+
+        function toggleBlkSearchCase() {
+            blkSearchCaseSensitive = !blkSearchCaseSensitive;
+            blkSearchIndex = -1;
+            renderBlkModal();
+        }
+
+        function toggleBlkSearchWholeWord() {
+            blkSearchWholeWord = !blkSearchWholeWord;
+            blkSearchIndex = -1;
+            renderBlkModal();
+        }
+
+        function applyBlkSearch() {
+            const input = byId("blk_search_input");
+            blkSearchQuery = (input ? input.value : "");
+            blkSearchIndex = -1;
+            renderBlkModal();
+        }
+
+        function resetBlkSearch() {
+            blkSearchQuery = "";
+            blkSearchMatches = [];
+            blkSearchIndex = -1;
+            const input = byId("blk_search_input");
+            if (input) input.value = "";
+            renderBlkModal();
+        }
+
+        function focusPrevBlkSearchHit() {
+            if (blkSearchMatches.length <= 0) return;
+            focusBlkSearchHit(blkSearchIndex - 1);
+        }
+
+        function focusNextBlkSearchHit() {
+            if (blkSearchMatches.length <= 0) return;
+            focusBlkSearchHit(blkSearchIndex + 1);
         }
 
         function setBlkVersions(payloadJson) {
@@ -1854,6 +2401,8 @@ HTML_TEMPLATE = """<!doctype html>
         function openBlkVersionsModal() {
             renderBlkModal();
             byId("blk_versions_modal").classList.remove("hidden");
+            const searchInput = byId("blk_search_input");
+            if (searchInput) searchInput.focus();
         }
 
         function closeBlkVersionsModal() {
@@ -1863,8 +2412,11 @@ HTML_TEMPLATE = """<!doctype html>
         async function copyBlkVersions() {
             if (!blkVersionsData || !blkVersionsData.versions_json || blkVersionsData.versions_json === "null") return;
             const text = blkVersionsData.versions_json;
+            const dict = t(currentLang());
             try {
-                if (navigator.clipboard && navigator.clipboard.writeText) {
+                if (bridge && bridge.copyText) {
+                    bridge.copyText(text);
+                } else if (navigator.clipboard && navigator.clipboard.writeText) {
                     await navigator.clipboard.writeText(text);
                 } else {
                     const ta = document.createElement("textarea");
@@ -1874,9 +2426,28 @@ HTML_TEMPLATE = """<!doctype html>
                     document.execCommand("copy");
                     ta.remove();
                 }
+                showCopyToast(dict.blk_versions_copied);
             } catch (_) {
-                // ignore clipboard failure in restricted environment
+                showCopyToast(dict.blk_versions_copy_failed || dict.cell_copy_failed);
             }
+        }
+
+        function syncBlkKeysFromUsmRows() {
+            const dict = t(currentLang());
+            if (!blkVersionsData || !blkVersionsData.versions_json || blkVersionsData.versions_json === "null") {
+                showCopyToast(dict.blk_versions_sync_no_data);
+                return;
+            }
+            if (!bridge || !bridge.syncBlkKeysFromRows) {
+                showCopyToast(dict.blk_versions_sync_no_bridge);
+                return;
+            }
+            openSyncResultModal(
+                dict.blk_sync_popup_note || "",
+                dict.blk_sync_dialog_waiting || dict.blk_sync_started_toast || dict.blk_versions_sync
+            );
+            const rows = Array.from(fileRows.values() || []);
+            bridge.syncBlkKeysFromRows(JSON.stringify(rows));
         }
 
         function getInputMode() {
@@ -1993,6 +2564,8 @@ HTML_TEMPLATE = """<!doctype html>
             window.__usmBridgeBound = true;
             bridge = channel.objects.bridge;
             bridge.logMessage.connect(appendLog);
+            bridge.uiToast.connect(showCopyToast);
+            bridge.syncResultReady.connect(onSyncResultReady);
             bridge.runStateChanged.connect(setRunning);
             bridge.fieldChosen.connect(setField);
             bridge.fileListReady.connect(loadFileList);
@@ -2040,6 +2613,8 @@ class _QtLogHandler(logging.Handler):
 
 class WebBridge(QObject):
     logMessage = Signal(str)
+    uiToast = Signal(str)
+    syncResultReady = Signal(str)
     runStateChanged = Signal(bool)
     windowTitleChanged = Signal(str)
     fieldChosen = Signal(str, str)
@@ -2053,6 +2628,8 @@ class WebBridge(QObject):
         super().__init__()
         self._worker: threading.Thread | None = None
         self._blk_worker: threading.Thread | None = None
+        self._blk_result_lock = threading.Lock()
+        self._last_blk_result: dict | None = None
         self._language = DEFAULT_LANGUAGE
         self._language_lock = threading.Lock()
         self._reports_by_id: dict[str, dict] = {}
@@ -2123,6 +2700,8 @@ class WebBridge(QObject):
         try:
             result = parse_blk_versions(input_path)
         except Exception as exc:
+            with self._blk_result_lock:
+                self._last_blk_result = None
             self.blkVersionsReady.emit(
                 json.dumps(
                     {
@@ -2142,6 +2721,8 @@ class WebBridge(QObject):
         candidates = result.get("rawdata_candidates") or []
         versions = result.get("versions")
         versions_list = result.get("versions_list")
+        with self._blk_result_lock:
+            self._last_blk_result = result
         self.blkVersionsReady.emit(json.dumps(result, ensure_ascii=False))
         if versions_list:
             self.logMessage.emit(
@@ -2151,6 +2732,340 @@ class WebBridge(QObject):
             self.logMessage.emit(
                 self._t("blk_parse_no_versions", count=count, candidates=len(candidates))
             )
+
+    @staticmethod
+    def _norm_video_name(name: str) -> str:
+        raw = str(name or "").strip()
+        if not raw:
+            return ""
+        lowered = raw.lower()
+        if lowered.endswith(".usm"):
+            lowered = lowered[:-4]
+        return lowered
+
+    @staticmethod
+    def _parse_sync_key(value) -> int | None:
+        text = str(value or "").strip()
+        if not text or text in {"—", "-", "None", "null"}:
+            return None
+        if text.startswith("0x") or text.startswith("0X"):
+            try:
+                return int(text, 16)
+            except ValueError:
+                return None
+        try:
+            return int(text)
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _key_first_dict(data: dict[str, Any]) -> dict[str, Any]:
+        ordered: dict[str, Any] = {}
+        if "key" in data:
+            ordered["key"] = data["key"]
+        if "version" in data:
+            ordered["version"] = data["version"]
+        for key, value in data.items():
+            if key in {"key", "version"}:
+                continue
+            ordered[key] = value
+        return ordered
+
+    @staticmethod
+    def _short_sync_videos(videos: Any) -> str:
+        if not isinstance(videos, list):
+            return "—"
+        items = [str(v or "").strip() for v in videos if str(v or "").strip()]
+        if not items:
+            return "—"
+        return ", ".join(items)
+
+    @staticmethod
+    def _is_ignored_test_video(name: str) -> bool:
+        return "test" in str(name or "").lower()
+
+    def _describe_sync_target(
+        self,
+        item: dict[str, Any],
+        group: dict[str, Any] | None = None,
+        videos: Any | None = None,
+    ) -> str:
+        parent_version = str(item.get("version") or "").strip() or "—"
+        item_videos = item.get("videos") if videos is None else videos
+        if group is None:
+            return f"version={parent_version}, videos={self._short_sync_videos(item_videos)}"
+        group_version = str(group.get("version") or "").strip() or "—"
+        group_videos = group.get("videos") if videos is None else videos
+        return (
+            f"version={parent_version}, group={group_version}, "
+            f"videos={self._short_sync_videos(group_videos)}"
+        )
+
+    def _build_sync_popup_text(self, unresolved_details: list[dict[str, Any]]) -> str:
+        lines: list[str] = []
+        for detail in unresolved_details:
+            game_version = str(detail.get("game_version") or "—")
+            owner_version = str(detail.get("owner_version") or "—")
+            for usm in detail.get("videos") or []:
+                lines.append(
+                    self._t(
+                        "blk_sync_popup_item",
+                        usm=str(usm or "").strip() or "—",
+                        owner_version=owner_version,
+                        game_version=game_version,
+                    )
+                )
+        if not lines:
+            return self._t("blk_sync_popup_empty")
+        return "\n".join(lines)
+
+    def _build_template_key_map(self) -> tuple[dict[str, int], str | None]:
+        def add_videos(mapping: dict[str, int], videos: Any, key_val: int | None) -> None:
+            if key_val is None or not isinstance(videos, list):
+                return
+            for video_name in videos:
+                normalized = self._norm_video_name(str(video_name or ""))
+                if normalized:
+                    mapping[normalized] = key_val
+
+        for template_path in SYNC_TEMPLATE_CANDIDATES:
+            if not template_path.exists() or not template_path.is_file():
+                continue
+            try:
+                decoded = json.loads(template_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+
+            if isinstance(decoded, dict):
+                versions_list = decoded.get("list")
+            elif isinstance(decoded, list):
+                versions_list = decoded
+            else:
+                versions_list = None
+
+            if not isinstance(versions_list, list):
+                continue
+
+            mapping: dict[str, int] = {}
+            for item in versions_list:
+                if not isinstance(item, dict):
+                    continue
+                add_videos(mapping, item.get("videos"), self._parse_sync_key(item.get("key")))
+                groups = item.get("videoGroups")
+                if isinstance(groups, list):
+                    for group in groups:
+                        if not isinstance(group, dict):
+                            continue
+                        add_videos(mapping, group.get("videos"), self._parse_sync_key(group.get("key")))
+
+            if mapping:
+                return mapping, str(template_path)
+
+        return {}, None
+
+    @Slot(str)
+    def syncBlkKeysFromRows(self, rows_json: str) -> None:
+        with self._blk_result_lock:
+            if not self._last_blk_result:
+                self.logMessage.emit(self._t("blk_sync_no_data"))
+                return
+            result = json.loads(json.dumps(self._last_blk_result, ensure_ascii=False))
+
+        versions_json = result.get("versions_json")
+        if not versions_json or versions_json == "null":
+            self.logMessage.emit(self._t("blk_sync_no_data"))
+            return
+
+        try:
+            rows = json.loads(rows_json or "[]")
+        except json.JSONDecodeError:
+            rows = []
+
+        name_to_key, template_path = self._build_template_key_map()
+        if template_path:
+            self.logMessage.emit(
+                self._t("blk_sync_template_loaded", path=template_path, count=len(name_to_key))
+            )
+        else:
+            self.logMessage.emit(self._t("blk_sync_template_missing"))
+
+        for row in rows if isinstance(rows, list) else []:
+            if not isinstance(row, dict):
+                continue
+            key_val = self._parse_sync_key(row.get("genshin_like_key"))
+            if key_val is None:
+                continue
+            row_name = str(row.get("name") or "").strip()
+            row_path = str(row.get("path") or "").strip()
+            candidates: set[str] = set()
+            if row_name:
+                candidates.add(self._norm_video_name(row_name))
+            if row_path:
+                candidates.add(self._norm_video_name(Path(row_path).name))
+                candidates.add(self._norm_video_name(Path(row_path).stem))
+            for c in candidates:
+                if c:
+                    # Current USM results override template mapping.
+                    name_to_key[c] = key_val
+
+        if not name_to_key:
+            self.logMessage.emit(self._t("blk_sync_no_usm_keys"))
+            return
+
+        try:
+            versions_decoded = json.loads(versions_json)
+        except json.JSONDecodeError:
+            self.logMessage.emit(self._t("blk_sync_no_data"))
+            return
+
+        if not isinstance(versions_decoded, dict):
+            self.logMessage.emit(self._t("blk_sync_no_data"))
+            return
+
+        versions_list = versions_decoded.get("list")
+        if not isinstance(versions_list, list):
+            self.logMessage.emit(self._t("blk_sync_no_data"))
+            return
+
+        updated_groups = 0
+        skipped_groups = 0
+        unresolved_details: list[dict[str, Any]] = []
+        ignored_test_details: list[dict[str, str]] = []
+
+        for item in versions_list:
+            if not isinstance(item, dict):
+                continue
+
+            groups = item.get("videoGroups")
+            if isinstance(groups, list):
+                for group in groups:
+                    if not isinstance(group, dict):
+                        continue
+                    if group.get("key") not in (None, "", "—"):
+                        continue
+                    videos = group.get("videos")
+                    if not isinstance(videos, list):
+                        continue
+                    non_test_videos = [
+                        str(v or "").strip()
+                        for v in videos
+                        if str(v or "").strip() and not self._is_ignored_test_video(str(v or ""))
+                    ]
+                    if not non_test_videos:
+                        skipped_groups += 1
+                        ignored_test_details.append(
+                            {"label": self._describe_sync_target(item, group, videos=videos)}
+                        )
+                        continue
+                    matched_key = None
+                    for v in non_test_videos:
+                        norm = self._norm_video_name(str(v or ""))
+                        if not norm:
+                            continue
+                        key_val = name_to_key.get(norm)
+                        if key_val is None:
+                            continue
+                        matched_key = key_val
+                        break
+                    if matched_key is not None:
+                        group["key"] = matched_key
+                        updated_groups += 1
+                    else:
+                        unresolved_details.append(
+                            {
+                                "label": self._describe_sync_target(item, group, videos=non_test_videos),
+                                "game_version": str(item.get("version") or "").strip() or "—",
+                                "owner_version": str(group.get("version") or "").strip() or "—",
+                                "videos": non_test_videos,
+                            }
+                        )
+                continue
+
+            # Legacy versions format: version entry has videos + single key.
+            if item.get("key") not in (None, "", "—"):
+                continue
+            videos = item.get("videos")
+            if not isinstance(videos, list):
+                continue
+            non_test_videos = [
+                str(v or "").strip()
+                for v in videos
+                if str(v or "").strip() and not self._is_ignored_test_video(str(v or ""))
+            ]
+            if not non_test_videos:
+                skipped_groups += 1
+                ignored_test_details.append(
+                    {"label": self._describe_sync_target(item, videos=videos)}
+                )
+                continue
+            matched_key = None
+            for v in non_test_videos:
+                norm = self._norm_video_name(str(v or ""))
+                if not norm:
+                    continue
+                key_val = name_to_key.get(norm)
+                if key_val is None:
+                    continue
+                matched_key = key_val
+                break
+            if matched_key is not None:
+                item["key"] = matched_key
+                updated_groups += 1
+            else:
+                unresolved_details.append(
+                    {
+                        "label": self._describe_sync_target(item, videos=non_test_videos),
+                        "game_version": str(item.get("version") or "").strip() or "—",
+                        "owner_version": str(item.get("version") or "").strip() or "—",
+                        "videos": non_test_videos,
+                    }
+                )
+
+        unresolved_groups = len(unresolved_details)
+
+        # Keep stable field order: key must appear before version.
+        normalized_list: list[dict[str, Any]] = []
+        for item in versions_list:
+            if not isinstance(item, dict):
+                continue
+            groups = item.get("videoGroups")
+            if isinstance(groups, list):
+                normalized_groups: list[dict[str, Any]] = []
+                for group in groups:
+                    if isinstance(group, dict):
+                        normalized_groups.append(self._key_first_dict(group))
+                item["videoGroups"] = normalized_groups
+            normalized_list.append(self._key_first_dict(item))
+        versions_list = normalized_list
+        versions_decoded["list"] = versions_list
+
+        result["versions_list"] = versions_list
+        result["versions_json"] = json.dumps(versions_decoded, ensure_ascii=False, indent=2)
+        if isinstance(result.get("versions"), dict):
+            result["versions"]["list"] = versions_list
+            result["versions"]["decoded_json"] = versions_decoded
+
+        with self._blk_result_lock:
+            self._last_blk_result = result
+
+        self.blkVersionsReady.emit(json.dumps(result, ensure_ascii=False))
+        self.logMessage.emit(
+            self._t(
+                "blk_sync_done",
+                updated=updated_groups,
+                unresolved=unresolved_groups,
+                skipped=skipped_groups,
+            )
+        )
+        self.syncResultReady.emit(self._build_sync_popup_text(unresolved_details))
+        if unresolved_details:
+            self.logMessage.emit(self._t("blk_sync_unresolved_header", count=len(unresolved_details)))
+            for detail in unresolved_details:
+                self.logMessage.emit(self._t("blk_sync_detail_item", label=detail["label"]))
+        if ignored_test_details:
+            self.logMessage.emit(self._t("blk_sync_ignored_test_header", count=len(ignored_test_details)))
+            for detail in ignored_test_details:
+                self.logMessage.emit(self._t("blk_sync_detail_item", label=detail["label"]))
 
     @Slot(str, str)
     def previewInput(self, mode: str, raw_input: str) -> None:
