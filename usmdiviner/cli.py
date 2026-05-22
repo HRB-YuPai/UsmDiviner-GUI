@@ -73,12 +73,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--mux-mkv",
         action="store_true",
-        help="mux decrypted video and usable audio into MKV",
+        help="export MP4 directly from extracted streams; keep MKV only as fallback when MP4 export fails",
     )
     parser.add_argument(
         "--ffmpeg",
         default=None,
-        help="path to ffmpeg for --mux-mkv; auto-detected if omitted",
+        help="path to ffmpeg for --mux-mkv MP4 workflow; auto-detected if omitted",
     )
     args = parser.parse_args(argv)
     if args.key is not None:
@@ -151,7 +151,7 @@ def main(argv: list[str] | None = None) -> int:
             find_vgmstream(args.vgmstream) or "not found; audio will be extracted only",
         )
     if args.mux_mkv:
-        logger.info("ffmpeg: %s", find_ffmpeg(args.ffmpeg) or "not found; MKV mux will be skipped")
+        logger.info("ffmpeg: %s", find_ffmpeg(args.ffmpeg) or "not found; MP4/MKV output will be skipped")
 
     reports: list[dict] = []
     if use_parallel:
@@ -237,7 +237,12 @@ def print_summary(report: dict) -> None:
     mux = report.get("mux")
     if mux:
         if mux.get("ok"):
-            logger.info("     mkv: %s", mux.get("mkv"))
+            if mux.get("mp4"):
+                logger.info("     mp4: %s (primary)", mux.get("mp4"))
+            if mux.get("mkv"):
+                logger.info("     mkv: %s (fallback)", mux.get("mkv"))
+            if mux.get("mp4_ok") is False:
+                logger.info("     mp4: skipped (%s)", mux.get("mp4_message") or mux.get("mp4_log_tail"))
         else:
             logger.info("     mkv: skipped (%s)", mux.get("message") or mux.get("log_tail"))
     if report.get("report_written"):

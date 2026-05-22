@@ -16,11 +16,14 @@ from __future__ import annotations
 import argparse
 import base64
 import binascii
+import gzip
 import io
 import json
 import re
 import struct
 import sys
+import zipfile
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
@@ -83,6 +86,14 @@ class NodeInfo:
     path: str
 
 
+@dataclass
+class GiBlkKeys:
+    sbox: bytes
+    expansion_key: bytes
+    init_vector: bytes
+    init_seed: int
+
+
 def _read_u8(buf: io.BytesIO) -> int:
     b = buf.read(1)
     if len(b) != 1:
@@ -102,6 +113,20 @@ def _read_i32(buf: io.BytesIO) -> int:
     if len(b) != 4:
         raise EOFError("Unexpected EOF while reading i32")
     return struct.unpack("<i", b)[0]
+
+
+def _read_i16(buf: io.BytesIO) -> int:
+    b = buf.read(2)
+    if len(b) != 2:
+        raise EOFError("Unexpected EOF while reading i16")
+    return struct.unpack("<h", b)[0]
+
+
+def _read_u16(buf: io.BytesIO) -> int:
+    b = buf.read(2)
+    if len(b) != 2:
+        raise EOFError("Unexpected EOF while reading u16")
+    return struct.unpack("<H", b)[0]
 
 
 def _read_i64(buf: io.BytesIO) -> int:
@@ -144,6 +169,14 @@ def _parse_csharp_byte_array(src: str, name: str) -> list[int]:
     return [int(x, 16) if x.lower().startswith("0x") else int(x) for x in nums]
 
 
+def _parse_csharp_ulong(src: str, name: str) -> int:
+    pattern = re.compile(rf"\b{name}\b\s*=\s*0x([0-9A-Fa-f]+)")
+    m = pattern.search(src)
+    if not m:
+        raise ValueError(f"Cannot find ulong '{name}' in CryptoHelper.cs")
+    return int(m.group(1), 16)
+
+
 def load_blb3_keys_from_crypthelper(path: Path) -> Blb3Keys:
     src = path.read_text(encoding="utf-8", errors="replace")
     return Blb3Keys(
@@ -156,6 +189,33 @@ def load_blb3_keys_from_crypthelper(path: Path) -> Blb3Keys:
         shift_row=_parse_csharp_byte_array(src, "Blb3ShiftRow"),
         key=_parse_csharp_byte_array(src, "Blb3Key"),
         mul=_parse_csharp_byte_array(src, "Blb3Mul"),
+    )
+
+
+BUILTIN_GI_KEYS = {
+    "GISBoxHex": "f7e7d8b86431d17488aab48b6aa3fc5559c56dc99a112f37ad35156261044401dd473dff8f51af0f1923921300534b67211c1b94e2299f4cfbbb75f0fe1fdbef1df13a1a0506cede630a6b2d28416c0c42dc58b6392ed2f62bac849617f33f8dab95cd300e6690f4ede08ec2782c7ef85d0291fa3cdab76ff94f145eea24569ec1a585d708834ef57632865cd3095ffd3603eee334777918bddf9771ba65687a548048385b4d5a7f0b7ca67b25d60d40d007999d9369d98cb3b5a41ecb3382e9c360a7ae45beb146b29c22c78198a9d56ee110cabc4a70d4c47212cf2a8716c873a13e5250a85727eccc7de4a089bfe58a20ebc0a249b9e826c6e6b03b9bf2435eb0e60df987d78adfe719996fd55b4ecbc248d2f2443503e986d095024a0462c59d1de2fd53088d5d75d93f9459142998768c792e8f390c4cc8c0819c10bbaff7e5b2b3ee5657b8fa407a7277246cc6473a74cf89b49b26aa3809c31cde9fdd161f55bdadac804f644b71b7f6062bc701ea46a6eb3dca07341bff7c7d2d3767609ac4977fd6beae85258865a200b68ed46e1a633692c1e115a5583b7e222f840f5c96b1f16d8bf4a8b50bfe23e3cef8f5514543181ed1babc90217030c92aec617b665f1333206bcd3ca09331b90582fb3e17126a0acc4da1735278bf285069dc6842e0a42ceff011e89149835af332dbabda270eeda3fc41a7a9d39ee4d85495aef0d57324d2a5990b1bc49ad8696f25ed8e9163f835625b9488b25c0fdda47a1a12c63744f14eb94d43d1adebb44680305ee4876e0a82cf7438b5c1d60105e883a96dcea8c551a33fda03d03a396c11976854c04bdf190c211f66bde96149c842bcec7fc34f2ea1583d81e314b802239e772b33a69313340e0645fb07750d1e40ab7df5bb55ef0465792fcaf329cbea17f4e6714c5026d9785f099c1c8531229bc9e08fac578b7c477e16f7085a591dc7f9002d603c9f96a2ba2070f648b02c72e164e7ffb756a75384d7e2d4a0b18ce52adc15285d3b367b866adb10be6bfe9d18de76f2cdb632fc41afbf67b3aac28afd89ccfa90988d52d3ee923e4a272ad79e025363eae98f35227ffeca75465794d94ed2d476a1c3d8bc9b84879151b1ab816447af9d6a5b2dd6957703c110ad610cbf11347e0138204bb64a1a45995f26bbc5cd23f1f7b48ee1f8685629d53def1228c42e79a648857314e4c66b92302793130de2c9f065dffbe3062f8c4c1815d3493e0759b088a9c83b86ee5c7a5eff8dac08e66054a07d4033a8fce03798bdec09b271581fde7489365266a23c965d509041f5172b0bdcf60083dd6db53a9cb8707c4369fd321bed0f5597c2fa394f9a8219e7786ecba4be24b3f3cccf1cf944a51e803fd021a3e83105168aba670ee5b7d1421ddb726ca7ce044ddac78b9f6f0a2cebf25a7baa25c062aef4b9",
+    "GIExpansionKeyHex": "542fed675ddd112eb74013e329ab6d283ed04d51d30b8f3c8f7d560db35c5bdf8f0526e59d36ee17f940c3056af11d2c79edc6e20c158793c191e58d44109834087ab676aab53421ee7258273f725a93757860c0a2f552979ff52886233ab4eac340123992e233d87a3944a95b585f7cd9fc9fef3f3a055ba54d1d6333d5eb43427971855792f8deed7de3f833202c9222e56ecc1d217104b8a78d3be61953361e144012ed7b85478dd2cdf84d71bc62",
+    "GIInitVectorHex": "e3fc2d269cc5a2ecd3f8c6d377c249b9",
+    "GIInitSeed": 0x567BA22BABB08098,
+}
+
+
+def load_gi_blk_keys_from_crypthelper(path: Path) -> GiBlkKeys:
+    src = path.read_text(encoding="utf-8", errors="replace")
+    return GiBlkKeys(
+        sbox=bytes(_parse_csharp_byte_array(src, "GISBox")),
+        expansion_key=bytes(_parse_csharp_byte_array(src, "GIExpansionKey")),
+        init_vector=bytes(_parse_csharp_byte_array(src, "GIInitVector")),
+        init_seed=_parse_csharp_ulong(src, "GIInitSeed"),
+    )
+
+
+def load_gi_blk_keys_from_builtin() -> GiBlkKeys:
+    return GiBlkKeys(
+        sbox=bytes.fromhex(BUILTIN_GI_KEYS["GISBoxHex"]),
+        expansion_key=bytes.fromhex(BUILTIN_GI_KEYS["GIExpansionKeyHex"]),
+        init_vector=bytes.fromhex(BUILTIN_GI_KEYS["GIInitVectorHex"]),
+        init_seed=int(BUILTIN_GI_KEYS["GIInitSeed"]),
     )
 
 
@@ -173,6 +233,417 @@ def load_blb3_keys_from_builtin() -> Blb3Keys:
         key=list(BUILTIN_BLB3_KEYS["Blb3Key"]),
         mul=list(BUILTIN_BLB3_KEYS["Blb3Mul"]),
     )
+
+
+class MT19937_64:
+    def __init__(self, seed: int):
+        self.N = 312
+        self.M = 156
+        self.MATRIX_A = 0xB5026F5AA96619E9
+        self.UPPER_MASK = 0xFFFFFFFF80000000
+        self.LOWER_MASK = 0x7FFFFFFF
+        self.mt = [0] * self.N
+        self.mti = self.N + 1
+        self.init(seed)
+
+    def init(self, seed: int) -> None:
+        self.mt[0] = seed & 0xFFFFFFFFFFFFFFFF
+        for i in range(1, self.N):
+            self.mt[i] = (
+                6364136223846793005 * (self.mt[i - 1] ^ (self.mt[i - 1] >> 62)) + i
+            ) & 0xFFFFFFFFFFFFFFFF
+        self.mti = self.N
+
+    def int64(self) -> int:
+        if self.mti >= self.N:
+            mag01 = [0, self.MATRIX_A]
+            for kk in range(self.N - self.M):
+                x = (self.mt[kk] & self.UPPER_MASK) | (self.mt[kk + 1] & self.LOWER_MASK)
+                self.mt[kk] = (self.mt[kk + self.M] ^ (x >> 1) ^ mag01[x & 1]) & 0xFFFFFFFFFFFFFFFF
+            for kk in range(self.N - self.M, self.N - 1):
+                x = (self.mt[kk] & self.UPPER_MASK) | (self.mt[kk + 1] & self.LOWER_MASK)
+                self.mt[kk] = (
+                    self.mt[kk - (self.N - self.M)] ^ (x >> 1) ^ mag01[x & 1]
+                ) & 0xFFFFFFFFFFFFFFFF
+            x = (self.mt[self.N - 1] & self.UPPER_MASK) | (self.mt[0] & self.LOWER_MASK)
+            self.mt[self.N - 1] = (self.mt[self.M - 1] ^ (x >> 1) ^ mag01[x & 1]) & 0xFFFFFFFFFFFFFFFF
+            self.mti = 0
+
+        x = self.mt[self.mti]
+        self.mti += 1
+        x ^= (x >> 29) & 0x5555555555555555
+        x ^= (x << 17) & 0x71D67FFFEDA60000
+        x ^= (x << 37) & 0xFFF7EEE000000000
+        x ^= x >> 43
+        return x & 0xFFFFFFFFFFFFFFFF
+
+
+AES_INV_SBOX = [
+    0x52, 0x09, 0x6A, 0xD5, 0x30, 0x36, 0xA5, 0x38, 0xBF, 0x40, 0xA3, 0x9E, 0x81, 0xF3, 0xD7, 0xFB,
+    0x7C, 0xE3, 0x39, 0x82, 0x9B, 0x2F, 0xFF, 0x87, 0x34, 0x8E, 0x43, 0x44, 0xC4, 0xDE, 0xE9, 0xCB,
+    0x54, 0x7B, 0x94, 0x32, 0xA6, 0xC2, 0x23, 0x3D, 0xEE, 0x4C, 0x95, 0x0B, 0x42, 0xFA, 0xC3, 0x4E,
+    0x08, 0x2E, 0xA1, 0x66, 0x28, 0xD9, 0x24, 0xB2, 0x76, 0x5B, 0xA2, 0x49, 0x6D, 0x8B, 0xD1, 0x25,
+    0x72, 0xF8, 0xF6, 0x64, 0x86, 0x68, 0x98, 0x16, 0xD4, 0xA4, 0x5C, 0xCC, 0x5D, 0x65, 0xB6, 0x92,
+    0x6C, 0x70, 0x48, 0x50, 0xFD, 0xED, 0xB9, 0xDA, 0x5E, 0x15, 0x46, 0x57, 0xA7, 0x8D, 0x9D, 0x84,
+    0x90, 0xD8, 0xAB, 0x00, 0x8C, 0xBC, 0xD3, 0x0A, 0xF7, 0xE4, 0x58, 0x05, 0xB8, 0xB3, 0x45, 0x06,
+    0xD0, 0x2C, 0x1E, 0x8F, 0xCA, 0x3F, 0x0F, 0x02, 0xC1, 0xAF, 0xBD, 0x03, 0x01, 0x13, 0x8A, 0x6B,
+    0x3A, 0x91, 0x11, 0x41, 0x4F, 0x67, 0xDC, 0xEA, 0x97, 0xF2, 0xCF, 0xCE, 0xF0, 0xB4, 0xE6, 0x73,
+    0x96, 0xAC, 0x74, 0x22, 0xE7, 0xAD, 0x35, 0x85, 0xE2, 0xF9, 0x37, 0xE8, 0x1C, 0x75, 0xDF, 0x6E,
+    0x47, 0xF1, 0x1A, 0x71, 0x1D, 0x29, 0xC5, 0x89, 0x6F, 0xB7, 0x62, 0x0E, 0xAA, 0x18, 0xBE, 0x1B,
+    0xFC, 0x56, 0x3E, 0x4B, 0xC6, 0xD2, 0x79, 0x20, 0x9A, 0xDB, 0xC0, 0xFE, 0x78, 0xCD, 0x5A, 0xF4,
+    0x1F, 0xDD, 0xA8, 0x33, 0x88, 0x07, 0xC7, 0x31, 0xB1, 0x12, 0x10, 0x59, 0x27, 0x80, 0xEC, 0x5F,
+    0x60, 0x51, 0x7F, 0xA9, 0x19, 0xB5, 0x4A, 0x0D, 0x2D, 0xE5, 0x7A, 0x9F, 0x93, 0xC9, 0x9C, 0xEF,
+    0xA0, 0xE0, 0x3B, 0x4D, 0xAE, 0x2A, 0xF5, 0xB0, 0xC8, 0xEB, 0xBB, 0x3C, 0x83, 0x53, 0x99, 0x61,
+    0x17, 0x2B, 0x04, 0x7E, 0xBA, 0x77, 0xD6, 0x26, 0xE1, 0x69, 0x14, 0x63, 0x55, 0x21, 0x0C, 0x7D,
+]
+AES_SHIFT_ROWS_INV = [0x00, 0x0D, 0x0A, 0x07, 0x04, 0x01, 0x0E, 0x0B, 0x08, 0x05, 0x02, 0x0F, 0x0C, 0x09, 0x06, 0x03]
+
+
+def _aes_gmul(a: int, b: int) -> int:
+    out = 0
+    for _ in range(8):
+        if b & 1:
+            out ^= a
+        hi = a & 0x80
+        a = (a << 1) & 0xFF
+        if hi:
+            a ^= 0x1B
+        b >>= 1
+    return out & 0xFF
+
+
+def _aes_sub_bytes_inv(state: bytearray) -> None:
+    for i, v in enumerate(state):
+        state[i] = AES_INV_SBOX[v]
+
+
+def _aes_shift_rows_inv(state: bytearray) -> None:
+    tmp = state[:]
+    for i, idx in enumerate(AES_SHIFT_ROWS_INV):
+        state[i] = tmp[idx]
+
+
+def _aes_mix_cols_inv(state: bytearray) -> None:
+    for off in (0, 4, 8, 12):
+        a0, a1, a2, a3 = state[off : off + 4]
+        state[off + 0] = _aes_gmul(a0, 14) ^ _aes_gmul(a3, 9) ^ _aes_gmul(a2, 13) ^ _aes_gmul(a1, 11)
+        state[off + 1] = _aes_gmul(a1, 14) ^ _aes_gmul(a0, 9) ^ _aes_gmul(a3, 13) ^ _aes_gmul(a2, 11)
+        state[off + 2] = _aes_gmul(a2, 14) ^ _aes_gmul(a1, 9) ^ _aes_gmul(a0, 13) ^ _aes_gmul(a3, 11)
+        state[off + 3] = _aes_gmul(a3, 14) ^ _aes_gmul(a2, 9) ^ _aes_gmul(a1, 13) ^ _aes_gmul(a0, 11)
+
+
+def aes_decrypt_with_expansion_key(block: bytes, expansion_key: bytes) -> bytes:
+    if len(block) < 16:
+        raise ValueError("AES block must be at least 16 bytes")
+    if len(expansion_key) < 176:
+        raise ValueError("GI expansion key must be at least 176 bytes")
+
+    state = bytearray(block[:16])
+
+    def xor_round(round_idx: int) -> None:
+        base = round_idx * 16
+        for i in range(16):
+            state[i] ^= expansion_key[base + i]
+
+    xor_round(0)
+    for i in range(9):
+        _aes_sub_bytes_inv(state)
+        _aes_shift_rows_inv(state)
+        _aes_mix_cols_inv(state)
+        xor_round(i + 1)
+
+    _aes_sub_bytes_inv(state)
+    _aes_shift_rows_inv(state)
+    xor_round(10)
+    return bytes(state)
+
+
+def _infer_blk_key_offset(file_bytes: bytes) -> tuple[int, int]:
+    """Infer where the GI BLK key-size field starts.
+
+    Seen variants include signatures that behave like `blk\x00...` and `blk0...`.
+    We probe candidate offsets and pick the first structurally plausible one.
+    """
+    # Candidate key-size offsets right after 4-byte or 5-byte signatures.
+    for key_off in (4, 5):
+        if len(file_bytes) < key_off + 4:
+            continue
+        count = struct.unpack_from("<i", file_bytes, key_off)[0]
+        if count <= 0:
+            continue
+        # Layout: [sig..?][count:4][key:count][skip:count][seed_size:2]
+        min_needed = key_off + 4 + count + count + 2
+        if min_needed <= len(file_bytes):
+            return key_off, count
+    raise ValueError("Unsupported or corrupted BLK header layout")
+
+
+def parse_blk_gi(
+    file_bytes: bytes,
+    keys: GiBlkKeys,
+    *,
+    key_off: int | None = None,
+    seed_signed: bool = True,
+    use_sbox: bool = True,
+) -> tuple[bytes, dict[str, Any]]:
+    data_offset = 0x2A
+    key_size = 0x1000
+    seed_block_size = 0x800
+
+    if key_off is None:
+        key_off, count = _infer_blk_key_offset(file_bytes)
+    else:
+        if len(file_bytes) < key_off + 4:
+            raise ValueError("Corrupted BLK: key offset out of range")
+        count = struct.unpack_from("<i", file_bytes, key_off)[0]
+        if count <= 0:
+            raise ValueError("Corrupted BLK: invalid key size")
+    r = io.BytesIO(file_bytes)
+    r.seek(key_off)
+    _ = _read_i32(r)
+    key = bytearray(r.read(count))
+    if len(key) != count:
+        raise ValueError("Corrupted BLK: short key block")
+
+    r.seek(count, io.SEEK_CUR)
+    seed_size_raw = _read_i16(r) if seed_signed else _read_u16(r)
+    seed_size = min(seed_size_raw, seed_block_size * 2 if keys.sbox else seed_block_size)
+    if seed_size < 0:
+        seed_size = 0
+
+    if len(key) < 16:
+        raise ValueError("Corrupted BLK: key block shorter than 16 bytes")
+
+    if use_sbox and keys.sbox:
+        for i in range(16):
+            key[i] = keys.sbox[((i % 4) * 0x100) | key[i]]
+
+    key[:16] = aes_decrypt_with_expansion_key(bytes(key[:16]), keys.expansion_key)
+    for i in range(16):
+        key[i] ^= keys.init_vector[i]
+
+    key_seed = 0xFFFFFFFFFFFFFFFF
+    for _ in range(0, seed_size, 8):
+        chunk = r.read(8)
+        if len(chunk) != 8:
+            break
+        key_seed ^= struct.unpack("<Q", chunk)[0]
+
+    key_low = struct.unpack("<Q", key[0:8])[0]
+    key_high = struct.unpack("<Q", key[8:16])[0]
+    seed = key_low ^ key_high ^ key_seed ^ keys.init_seed
+
+    mt = MT19937_64(seed)
+    xorpad = bytearray(key_size)
+    for i in range(0, key_size, 8):
+        xorpad[i : i + 8] = struct.pack("<Q", mt.int64())
+
+    dec = bytearray()
+    for i in range(data_offset, len(file_bytes)):
+        dec.append(file_bytes[i] ^ xorpad[(i - data_offset) % key_size])
+
+    meta = {
+        "signature": file_bytes[: key_off].decode("latin1", errors="replace"),
+        "key_offset": key_off,
+        "key_size": count,
+        "seed_signed": seed_signed,
+        "use_sbox": use_sbox,
+        "seed_size": seed_size,
+        "seed": f"0x{seed:016X}",
+    }
+    return bytes(dec), meta
+
+
+def _candidate_blk_key_offsets(file_bytes: bytes) -> list[int]:
+    offsets: list[int] = []
+    for off in (4, 5):
+        if off not in offsets:
+            offsets.append(off)
+    null_pos = file_bytes.find(b"\x00", 0, 64)
+    if null_pos >= 0:
+        off = null_pos + 1
+        if off not in offsets:
+            offsets.append(off)
+    return offsets
+
+
+# GI mhy0 constants used to descramble header/entry data.
+MHY0_SHIFT_ROW = (
+    0x0B, 0x02, 0x08, 0x0C, 0x01, 0x05, 0x00, 0x0F,
+    0x06, 0x07, 0x09, 0x03, 0x0D, 0x04, 0x0E, 0x0A,
+    0x04, 0x05, 0x07, 0x0A, 0x02, 0x0F, 0x0B, 0x08,
+    0x0E, 0x0D, 0x09, 0x06, 0x0C, 0x03, 0x00, 0x01,
+    0x08, 0x00, 0x0C, 0x06, 0x04, 0x0B, 0x07, 0x09,
+    0x05, 0x03, 0x0F, 0x01, 0x0D, 0x0A, 0x02, 0x0E,
+)
+MHY0_KEY = (0x48, 0x14, 0x36, 0xED, 0x8E, 0x44, 0x5B, 0xB6)
+MHY0_MUL = (0xA7, 0x99, 0x66, 0x50, 0xB9, 0x2D, 0xF0, 0x78)
+
+
+def _mhy0_read_int1(buf: io.BytesIO) -> int:
+    b = buf.read(7)
+    if len(b) != 7:
+        raise EOFError("Unexpected EOF while reading mhy0 int1")
+    return b[1] | (b[6] << 8) | (b[3] << 16) | (b[2] << 24)
+
+
+def _mhy0_read_int2(buf: io.BytesIO) -> int:
+    b = buf.read(6)
+    if len(b) != 6:
+        raise EOFError("Unexpected EOF while reading mhy0 int2")
+    return b[2] | (b[4] << 8) | (b[0] << 16) | (b[5] << 24)
+
+
+def _mhy0_read_string(buf: io.BytesIO) -> str:
+    b = buf.read(0x100)
+    if len(b) != 0x100:
+        raise EOFError("Unexpected EOF while reading mhy0 string")
+    return b.split(b"\x00", 1)[0].decode("utf-8", errors="replace")
+
+
+def _mhy0_read_bool(buf: io.BytesIO) -> bool:
+    value = _mhy0_read_int2(buf)
+    return ((value >> 24) & 0xFF) != 0
+
+
+def _gi_gf256_mul(a: int, b: int) -> int:
+    if a == 0 or b == 0:
+        return 0
+    gf_exp = BUILTIN_BLB3_KEYS["GF256Exp"]
+    gf_log = BUILTIN_BLB3_KEYS["GF256Log"]
+    return gf_exp[(gf_log[a] + gf_log[b]) % 0xFF]
+
+
+def _mhy0_descramble_chunk(data: bytearray, offset: int, sbox: bytes) -> None:
+    vec = bytearray(0x10)
+    for i in range(3):
+        for j in range(0x10):
+            k = MHY0_SHIFT_ROW[(2 - i) * 0x10 + j]
+            idx = j % 8
+            mul = _gi_gf256_mul(MHY0_MUL[idx], data[offset + k])
+            vec[j] = MHY0_KEY[idx] ^ sbox[((j % 4) * 0x100) | mul]
+        data[offset : offset + 0x10] = vec
+
+
+def _mhy0_descramble(data: bytes, block_size: int, entry_size: int, sbox: bytes) -> bytes:
+    out = bytearray(data)
+    if len(out) < 8:
+        return bytes(out)
+
+    block_size = min(block_size, len(out))
+    rounded_entry_size = ((entry_size + 0xF) // 0x10) * 0x10
+    for i in range(0, rounded_entry_size, 0x10):
+        off = i + 4
+        if off + 0x10 > len(out):
+            break
+        _mhy0_descramble_chunk(out, off, sbox)
+
+    for i in range(4):
+        out[i] ^= out[i + 4]
+
+    current = rounded_entry_size + 4
+    finished = False
+    while current < block_size and not finished:
+        for i in range(entry_size):
+            idx = current + i
+            if idx >= len(out):
+                finished = True
+                break
+            out[idx] ^= out[i + 4]
+            if idx >= block_size - 1:
+                finished = True
+                break
+        current += entry_size
+
+    return bytes(out)
+
+
+def _lz4_decompress_block(data: bytes, expected_size: int) -> bytes:
+    if lz4 is None:
+        raise RuntimeError("lz4 package required for mhy0 parsing (pip install lz4)")
+    try:
+        dec = lz4.decompress(data, uncompressed_size=expected_size)
+    except Exception:
+        dec = lz4.decompress(data)
+    if len(dec) != expected_size:
+        dec = dec[:expected_size]
+    return dec
+
+
+def parse_mhy0_from_payload(payload: bytes, keys: GiBlkKeys) -> tuple[list[tuple[str, bytes]], dict[str, Any]]:
+    files: list[tuple[str, bytes]] = []
+    start = payload.find(b"mhy0")
+    if start < 0:
+        return files, {"mhy0_streams": 0, "mhy0_stream_offset": None}
+
+    r = io.BytesIO(payload)
+    r.seek(start)
+    streams = 0
+
+    while r.tell() < len(payload):
+        pos = r.tell()
+        magic = r.read(4)
+        if len(magic) < 4 or magic != b"mhy0":
+            break
+
+        header_size = _read_i32(r)
+        if header_size <= 0:
+            break
+        enc_header = r.read(header_size)
+        if len(enc_header) != header_size:
+            break
+
+        header = _mhy0_descramble(enc_header, 0x39, 0x1C, keys.sbox)
+        hr = io.BytesIO(header)
+        hr.seek(0x20)
+        dec_header_size = _mhy0_read_int1(hr)
+        comp_header = hr.read()
+        dec_header = _lz4_decompress_block(comp_header, dec_header_size)
+
+        dr = io.BytesIO(dec_header)
+        bundle_count = _mhy0_read_int2(dr)
+        directory: list[dict[str, Any]] = []
+        for _ in range(bundle_count):
+            directory.append(
+                {
+                    "path": _mhy0_read_string(dr),
+                    "is_asset": _mhy0_read_bool(dr),
+                    "offset": _mhy0_read_int2(dr),
+                    "size": _mhy0_read_int1(dr),
+                }
+            )
+
+        block_count = _mhy0_read_int2(dr)
+        blocks: list[tuple[int, int]] = []
+        for _ in range(block_count):
+            csz = _mhy0_read_int2(dr)
+            usz = _mhy0_read_int1(dr)
+            blocks.append((csz, usz))
+
+        block_blob = bytearray()
+        for csz, usz in blocks:
+            comp = r.read(csz)
+            if len(comp) != csz:
+                raise EOFError("Corrupted mhy0: short compressed block")
+            if csz < 0x10:
+                raise ValueError(f"Corrupted mhy0: invalid compressed block size {csz}")
+            comp = _mhy0_descramble(comp, min(csz, 0x21), 8, keys.sbox)
+            block_blob.extend(_lz4_decompress_block(comp[0x0C:csz], usz))
+
+        blob = bytes(block_blob)
+        for node in directory:
+            noff = int(node["offset"])
+            nsize = int(node["size"])
+            if noff < 0 or nsize < 0 or noff + nsize > len(blob):
+                continue
+            files.append((str(node["path"]), blob[noff : noff + nsize]))
+
+        streams += 1
+        # Defensive break for malformed streams that don't advance.
+        if r.tell() <= pos:
+            break
+
+    return files, {"mhy0_streams": streams, "mhy0_stream_offset": start}
 
 
 def _gf256_mul(keys: Blb3Keys, a: int, b: int) -> int:
@@ -557,12 +1028,142 @@ def try_decode_json(data: bytes) -> dict | list | None:
     return None
 
 
+def _scan_embedded_json_in_text(text: str, max_hits: int = 8) -> list[tuple[int, Any]]:
+    """Find JSON objects/arrays embedded anywhere inside decoded text."""
+    hits: list[tuple[int, Any]] = []
+    decoder = json.JSONDecoder()
+    n = len(text)
+    i = 0
+    while i < n and len(hits) < max_hits:
+        ch = text[i]
+        if ch not in "[{":
+            i += 1
+            continue
+        try:
+            obj, _end = decoder.raw_decode(text[i:])
+        except Exception:
+            i += 1
+            continue
+        hits.append((i, obj))
+        i += 1
+    return hits
+
+
+def scan_embedded_json_candidates(data: bytes, max_scan_size: int = 4 * 1024 * 1024) -> list[dict[str, Any]]:
+    """Deep scan for JSON payloads hidden in binary blobs.
+
+    This catches cases where JSON is UTF-16 encoded or prefixed with non-JSON bytes,
+    which the plain-text regex path can miss.
+    """
+    out: list[dict[str, Any]] = []
+    sample = data[:max_scan_size]
+    for enc in ("utf-8", "utf-16-le", "utf-16-be", "latin1"):
+        try:
+            txt = sample.decode(enc, errors="ignore")
+        except Exception:
+            continue
+        if not txt:
+            continue
+        for off, parsed in _scan_embedded_json_in_text(txt):
+            out.append(
+                {
+                    "kind": "embedded_json_scan",
+                    "encoding": enc,
+                    "offset": off,
+                    "decoded_json": parsed,
+                    "decoded_size": len(sample),
+                }
+            )
+            if len(out) >= 8:
+                return out
+    return out
+
+
+def _extract_balanced_json_bytes(data: bytes, start: int) -> bytes | None:
+    if start < 0 or start >= len(data):
+        return None
+    first = data[start : start + 1]
+    if first not in (b"{", b"["):
+        return None
+
+    depth = 0
+    in_str = False
+    esc = False
+    for i in range(start, len(data)):
+        b = data[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif b == 0x5C:
+                esc = True
+            elif b == 0x22:
+                in_str = False
+            continue
+
+        if b == 0x22:
+            in_str = True
+        elif b in (0x7B, 0x5B):
+            depth += 1
+        elif b in (0x7D, 0x5D):
+            depth -= 1
+            if depth == 0:
+                return data[start : i + 1]
+        elif b < 0x20 and b not in (0x09, 0x0A, 0x0D, 0x20):
+            # Control bytes outside JSON whitespace typically indicate this is
+            # not a clean JSON segment.
+            return None
+    return None
+
+
+def _iter_decompressed_payloads(data: bytes) -> Iterable[tuple[str, bytes]]:
+    """Yield known decompressed variants for additional JSON scanning."""
+    # gzip
+    if len(data) >= 2 and data[:2] == b"\x1F\x8B":
+        try:
+            yield ("gzip", gzip.decompress(data))
+        except Exception:
+            pass
+
+    # zlib/deflate
+    try:
+        dec = zlib.decompress(data)
+        if dec:
+            yield ("zlib", dec)
+    except Exception:
+        pass
+
+    # zip archive entries
+    if len(data) >= 4 and data[:4] == b"PK\x03\x04":
+        try:
+            with zipfile.ZipFile(io.BytesIO(data)) as zf:
+                for name in zf.namelist()[:16]:
+                    try:
+                        yield (f"zip:{name}", zf.read(name))
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+
+
 def scan_rawdata_candidates(files: Iterable[tuple[str, bytes]]) -> list[dict]:
     out: list[dict] = []
     b64_pat = re.compile(rb"[A-Za-z0-9+/=]{64,}")
     text_pat = re.compile(rb"[ -~]{32,}")
+    json_markers = (b'{"list"', b'{"RawData"')
 
     for path, data in files:
+        # Candidate 0: file itself is JSON text/bytes (utf-8/utf-16/etc).
+        direct = try_decode_json(data)
+        if direct is not None:
+            out.append(
+                {
+                    "source": path,
+                    "kind": "file_json",
+                    "decoded_json": direct,
+                    "decoded_size": len(data),
+                }
+            )
+
         # Candidate A: file itself is a base64 blob.
         if looks_like_b64_ascii(data):
             try:
@@ -631,6 +1232,52 @@ def scan_rawdata_candidates(files: Iterable[tuple[str, bytes]]) -> list[dict]:
                 }
             )
 
+        # Candidate D: deep scan JSON hidden in binary/UTF-16 payloads.
+        for hit in scan_embedded_json_candidates(data):
+            hit["source"] = path
+            out.append(hit)
+
+        # Candidate E: decompressed payload variants (gzip/zlib/zip).
+        for variant, dec in _iter_decompressed_payloads(data):
+            parsed = try_decode_json(dec)
+            if parsed is not None:
+                out.append(
+                    {
+                        "source": path,
+                        "kind": "decompressed_json",
+                        "compression": variant,
+                        "decoded_json": parsed,
+                        "decoded_size": len(dec),
+                    }
+                )
+            for hit in scan_embedded_json_candidates(dec):
+                hit["source"] = path
+                hit["kind"] = "decompressed_embedded_json_scan"
+                hit["compression"] = variant
+                out.append(hit)
+
+        # Candidate F: byte-level balanced JSON extraction from known markers.
+        for marker in json_markers:
+            start = 0
+            while True:
+                idx = data.find(marker, start)
+                if idx < 0:
+                    break
+                raw_json = _extract_balanced_json_bytes(data, idx)
+                if raw_json:
+                    parsed = try_decode_json(raw_json)
+                    if parsed is not None:
+                        out.append(
+                            {
+                                "source": path,
+                                "kind": "embedded_balanced_json",
+                                "offset": idx,
+                                "decoded_json": parsed,
+                                "decoded_size": len(raw_json),
+                            }
+                        )
+                start = idx + 1
+
     return out
 
 
@@ -638,6 +1285,30 @@ def _select_versions_payload(candidates: list[dict]) -> dict[str, Any] | list[An
     for candidate in candidates:
         decoded = candidate.get("decoded_json")
         if isinstance(decoded, dict):
+            # AnimeStudio-style wrapper: {"RawData":"<base64>", "Type":"Bytes", ...}
+            raw_data = decoded.get("RawData")
+            if isinstance(raw_data, str) and raw_data:
+                try:
+                    raw_dec = base64.b64decode(raw_data, validate=False)
+                    raw_json = try_decode_json(raw_dec)
+                except Exception:
+                    raw_json = None
+                if isinstance(raw_json, dict) and "list" in raw_json:
+                    return {
+                        "source": candidate.get("source"),
+                        "kind": "wrapped_rawdata_base64",
+                        "offset": candidate.get("offset"),
+                        "list": raw_json.get("list"),
+                        "decoded_json": raw_json,
+                    }
+                if isinstance(raw_json, list):
+                    return {
+                        "source": candidate.get("source"),
+                        "kind": "wrapped_rawdata_base64",
+                        "offset": candidate.get("offset"),
+                        "list": raw_json,
+                        "decoded_json": raw_json,
+                    }
             if "list" in decoded:
                 return {
                     "source": candidate.get("source"),
@@ -669,14 +1340,84 @@ def parse_blk_versions(input_path: str | Path, cryptohelper: str | Path | None =
     in_path = Path(input_path)
     ch_path = Path(cryptohelper) if cryptohelper else None
 
+    # BEGIN legacy Blb3-only flow (comment out this whole block when enabling unified mode)
     file_bytes = in_path.read_bytes()
-    if ch_path is not None:
-        keys = load_blb3_keys_from_crypthelper(ch_path)
-    else:
-        keys = load_blb3_keys_from_builtin()
+    precomputed_candidates: list[dict] | None = None
+    if file_bytes.startswith(b"Blb\x03"):
+        if ch_path is not None:
+            blb3_keys = load_blb3_keys_from_crypthelper(ch_path)
+        else:
+            blb3_keys = load_blb3_keys_from_builtin()
+        files, meta = parse_blb3(file_bytes, blb3_keys)
+    elif file_bytes.startswith((b"blk\x00", b"blk0")):
+        if ch_path is not None:
+            gi_keys = load_gi_blk_keys_from_crypthelper(ch_path)
+        else:
+            gi_keys = load_gi_blk_keys_from_builtin()
 
-    files, meta = parse_blb3(file_bytes, keys)
-    candidates = scan_rawdata_candidates(files)
+        best: tuple[int, bytes, dict[str, Any], list[tuple[str, bytes]], list[dict], dict[str, Any]] | None = None
+        for off in _candidate_blk_key_offsets(file_bytes):
+            for seed_signed in (True, False):
+                for use_sbox in (True, False):
+                    try:
+                        payload_try, meta_try = parse_blk_gi(
+                            file_bytes,
+                            gi_keys,
+                            key_off=off,
+                            seed_signed=seed_signed,
+                            use_sbox=use_sbox,
+                        )
+                    except Exception:
+                        continue
+                    files_try = [("__blk_payload.bin", payload_try)]
+                    mhy0_meta_try: dict[str, Any] = {"mhy0_streams": 0, "mhy0_stream_offset": None}
+                    try:
+                        mhy0_files_try, mhy0_meta_try = parse_mhy0_from_payload(payload_try, gi_keys)
+                        if mhy0_files_try:
+                            files_try.extend(mhy0_files_try)
+                    except Exception as exc:
+                        mhy0_meta_try = {
+                            "mhy0_streams": 0,
+                            "mhy0_stream_offset": payload_try.find(b"mhy0"),
+                            "mhy0_error": str(exc),
+                        }
+
+                    cand_try = scan_rawdata_candidates(files_try)
+                    ver_try = _select_versions_payload(cand_try)
+                    score = (1000 if ver_try is not None else 0) + (10 * max(0, len(files_try) - 1)) + len(cand_try)
+                    if best is None or score > best[0]:
+                        best = (score, payload_try, meta_try, files_try, cand_try, mhy0_meta_try)
+
+        if best is None:
+            payload, blk_meta = parse_blk_gi(file_bytes, gi_keys)
+            files = [("__blk_payload.bin", payload)]
+            mhy0_meta = {"mhy0_streams": 0, "mhy0_stream_offset": None}
+            try:
+                mhy0_files, mhy0_meta = parse_mhy0_from_payload(payload, gi_keys)
+                if mhy0_files:
+                    files.extend(mhy0_files)
+            except Exception as exc:
+                mhy0_meta = {
+                    "mhy0_streams": 0,
+                    "mhy0_stream_offset": payload.find(b"mhy0"),
+                    "mhy0_error": str(exc),
+                }
+            precomputed_candidates = scan_rawdata_candidates(files)
+            blk_meta["fallback_attempts"] = 0
+        else:
+            _score, payload, blk_meta, files, precomputed_candidates, mhy0_meta = best
+            blk_meta["fallback_attempts"] = len(_candidate_blk_key_offsets(file_bytes)) * 4
+
+        meta = {
+            "signature": "blk",
+            "format": "gi_blk",
+            **blk_meta,
+            **mhy0_meta,
+        }
+    else:
+        raise ValueError(f"Unsupported BLK/BLB signature: {file_bytes[:8]!r}")
+
+    candidates = precomputed_candidates if precomputed_candidates is not None else scan_rawdata_candidates(files)
     versions = _select_versions_payload(candidates)
     versions_list = versions["list"] if isinstance(versions, dict) else None
     # Use the full original decoded JSON (e.g. {"list": [...]}) to preserve the
@@ -716,6 +1457,18 @@ def main() -> int:
     ch_path = Path(args.cryptohelper) if args.cryptohelper else None
     out_path = Path(args.output)
 
+    # Optional standalone unified mode (.blk + .blb):
+    # Uncomment this block and comment out the legacy Blb3-only flow below.
+    # unified = parse_blk_versions(in_path, ch_path)
+    # if args.dump_files_dir:
+    #     dump_dir = Path(args.dump_files_dir)
+    #     dump_dir.mkdir(parents=True, exist_ok=True)
+    #     for rel in unified.get("inner_files", []):
+    #         print(f"[INFO] dump template: {rel}")
+    # out_path.write_text(json.dumps(unified, ensure_ascii=False, indent=2), encoding="utf-8")
+    # print(f"[OK] Wrote unified result: {out_path}")
+    # return 0
+
     file_bytes = in_path.read_bytes()
     if ch_path is not None:
         keys = load_blb3_keys_from_crypthelper(ch_path)
@@ -747,6 +1500,7 @@ def main() -> int:
     print(f"[OK] Parsed {len(files)} inner files")
     print(f"[OK] Found {len(candidates)} RawData candidates")
     print(f"[OK] Wrote: {out_path}")
+    # END legacy Blb3-only flow
     return 0
 
 

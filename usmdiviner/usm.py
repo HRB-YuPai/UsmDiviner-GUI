@@ -61,8 +61,13 @@ def parse_usm_chunks(data: bytes | mmap.mmap) -> list[UsmChunk]:
 
 def collect_usm_inputs(input_path: Path) -> list[Path]:
     if input_path.is_file():
-        return [input_path]
-    return sorted(input_path.rglob("*.usm"))
+        return [input_path] if input_path.suffix.lower() == ".usm" else []
+
+    files: list[Path] = []
+    for path in input_path.rglob("*"):
+        if path.is_file() and path.suffix.lower() == ".usm":
+            files.append(path)
+    return sorted(files)
 
 
 def sig_name(sig: int) -> str:

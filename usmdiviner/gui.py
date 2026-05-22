@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import concurrent.futures as futures
+import datetime as dt
 import json
 import logging
 import os
+import shutil
+import subprocess
+import sys
 import threading
 from pathlib import Path
 from typing import Any
@@ -19,6 +23,7 @@ from .keys import parse_full_key
 from .models import ProcessOptions
 from .processor import process_one
 from .tools import find_ffmpeg, find_vgmstream
+from .tools import mux_to_mkv, transcode_ivf_to_mp4
 from .usm import collect_usm_inputs
 
 logger = logging.getLogger(__name__)
@@ -144,7 +149,9 @@ HTML_TEMPLATE = """<!doctype html>
             --modal-overlay: #3d2d1f44;
         }
 
-        * { box-sizing: border-box; }
+        * {
+            box-sizing: border-box;
+        }
 
         body {
             margin: 0;
@@ -234,6 +241,165 @@ HTML_TEMPLATE = """<!doctype html>
             font-family: "UsmDivinerZh", "Segoe UI", "Noto Sans", "Microsoft YaHei", "PingFang TC", sans-serif;
         }
 
+        .native-select-hidden {
+            display: none !important;
+        }
+
+        .select-shell {
+            position: relative;
+            width: 100%;
+        }
+
+        .select-trigger {
+            width: 100%;
+            min-height: 34px;
+            border-radius: 12px;
+            border: 1px solid var(--input-border);
+            background:
+                linear-gradient(180deg, color-mix(in srgb, var(--input-bg) 94%, #ffffff 6%), color-mix(in srgb, var(--input-bg) 90%, #000000 10%));
+            color: var(--fg);
+            padding: 8px 12px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            font-size: 12px;
+            line-height: 1.2;
+            font-family: "UsmDivinerZh", "Segoe UI", "Noto Sans", "Microsoft YaHei", "PingFang TC", sans-serif;
+            box-shadow: inset 0 1px 0 #ffffff12, 0 8px 18px #00000014;
+            cursor: pointer;
+            transition:
+                border-color 260ms ease,
+                box-shadow 320ms ease,
+                transform 260ms ease,
+                background 320ms ease;
+        }
+
+        .select-trigger:hover {
+            border-color: var(--acc);
+            box-shadow: inset 0 1px 0 #ffffff18, 0 12px 24px #0000001c;
+            transform: translateY(-1px);
+        }
+
+        .select-trigger:focus-visible {
+            outline: none;
+            border-color: var(--acc);
+            box-shadow: 0 0 0 4px var(--focus-ring), 0 12px 28px #00000020;
+        }
+
+        .select-trigger-label {
+            min-width: 0;
+            overflow: hidden;
+            white-space: nowrap;
+            text-overflow: ellipsis;
+            text-align: left;
+        }
+
+        .select-trigger-icon {
+            width: 10px;
+            height: 10px;
+            flex: 0 0 auto;
+            border-right: 2px solid currentColor;
+            border-bottom: 2px solid currentColor;
+            transform: rotate(45deg) translateY(-1px);
+            opacity: 0.72;
+            transition: transform 420ms cubic-bezier(0.22, 1, 0.36, 1), opacity 240ms ease;
+        }
+
+        .select-shell.open .select-trigger {
+            border-color: var(--acc);
+            box-shadow: 0 0 0 4px var(--focus-ring), 0 14px 30px #00000022;
+            transform: translateY(-1px);
+        }
+
+        .select-shell.open .select-trigger-icon {
+            transform: rotate(225deg) translateY(1px);
+            opacity: 0.95;
+        }
+
+        .select-menu {
+            position: absolute;
+            top: calc(100% + 8px);
+            left: 0;
+            right: 0;
+            padding: 8px;
+            border-radius: 14px;
+            border: 1px solid var(--line);
+            background: linear-gradient(180deg, var(--panel0), var(--panel1));
+            box-shadow: 0 22px 38px #00000026;
+            opacity: 0;
+            visibility: hidden;
+            pointer-events: none;
+            transform: translateY(-10px) scale(0.96);
+            transform-origin: top center;
+            transition:
+                opacity 700ms cubic-bezier(0.22, 1, 0.36, 1),
+                transform 880ms cubic-bezier(0.18, 0.9, 0.22, 1),
+                visibility 700ms ease;
+            z-index: 80;
+        }
+
+        .select-shell.open .select-menu {
+            opacity: 1;
+            visibility: visible;
+            pointer-events: auto;
+            transform: translateY(0) scale(1);
+        }
+
+        .select-option {
+            width: 100%;
+            border: 1px solid transparent;
+            background: transparent;
+            color: var(--fg);
+            border-radius: 10px;
+            padding: 9px 11px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            text-align: left;
+            font-size: 12px;
+            font-family: inherit;
+            cursor: pointer;
+            transition: background 240ms ease, border-color 240ms ease, transform 240ms ease, color 240ms ease;
+        }
+
+        .select-option:hover,
+        .select-option:focus-visible {
+            outline: none;
+            background: color-mix(in srgb, var(--surface-2) 84%, var(--acc) 16%);
+            border-color: color-mix(in srgb, var(--acc) 50%, var(--line) 50%);
+            transform: translateX(2px);
+        }
+
+        .select-option.active {
+            background: color-mix(in srgb, var(--surface-2) 70%, var(--acc) 30%);
+            border-color: var(--acc);
+            box-shadow: inset 0 1px 0 #ffffff14;
+        }
+
+        .select-option-check {
+            opacity: 0;
+            color: var(--acc);
+            font-weight: 700;
+            transition: opacity 200ms ease;
+        }
+
+        .select-option.active .select-option-check {
+            opacity: 1;
+        }
+
+        .toolbar-select-shell .select-trigger {
+            min-height: 32px;
+            padding: 7px 11px;
+            border-radius: 10px;
+        }
+
+        .video-export-shell .select-trigger {
+            min-height: 36px;
+            border-radius: 11px;
+        }
+
         .grid {
             display: grid;
             grid-template-columns: 1fr;
@@ -308,18 +474,18 @@ HTML_TEMPLATE = """<!doctype html>
             color: var(--muted);
             font-size: 12px;
             white-space: nowrap;
-            min-width: 5em;
+            min-width: max-content;
         }
 
         .row {
             display: grid;
-            grid-template-columns: 5em 1fr auto;
+            grid-template-columns: max-content 1fr auto;
             gap: 7px;
             align-items: center;
         }
 
         .row.small {
-            grid-template-columns: 5em 1fr;
+            grid-template-columns: max-content 1fr;
         }
 
         .mode {
@@ -363,6 +529,10 @@ HTML_TEMPLATE = """<!doctype html>
             color: var(--muted);
             opacity: 0.78;
             font-family: "UsmDivinerZh", "Segoe UI", "Noto Sans", "Microsoft YaHei", "PingFang TC", sans-serif;
+        }
+
+        input[type="text"][readonly] {
+            cursor: default;
         }
 
         .btn {
@@ -418,14 +588,17 @@ HTML_TEMPLATE = """<!doctype html>
             min-height: 0;
             max-height: none;
             flex: 1;
+            min-width: 0;
+            max-width: 100%;
         }
 
         table.file-table {
-            width: 100%;
+            width: max-content;
             min-width: 100%;
             border-collapse: collapse;
             table-layout: fixed;
             font-size: 11px;
+            font-family: inherit;
             color: var(--fg);
         }
 
@@ -455,22 +628,7 @@ HTML_TEMPLATE = """<!doctype html>
             position: sticky;
         }
 
-        .resizer {
-            position: absolute;
-            top: 0;
-            right: 0;
-            width: 6px;
-            height: 100%;
-            cursor: col-resize;
-            user-select: none;
-            touch-action: none;
-            opacity: 0;
-        }
-
-        .file-table th:hover .resizer {
-            opacity: 0.7;
-            background: linear-gradient(180deg, transparent, var(--acc), transparent);
-        }
+        .resizer { display: none; }
 
         .file-table tr.pending { opacity: 0.8; }
         .file-table tr.ok { background: #163524; }
@@ -535,7 +693,7 @@ HTML_TEMPLATE = """<!doctype html>
 
         /* BLK row: 4-column grid — label | textbox (1fr) | Load btn | View btn (collapses when hidden) */
         .blk-row {
-            grid-template-columns: 5em 1fr auto auto;
+            grid-template-columns: max-content 1fr auto auto;
         }
 
         .run {
@@ -592,7 +750,12 @@ HTML_TEMPLATE = """<!doctype html>
         }
 
         .cell-progress {
-            width: 120px;
+            width: min(160px, 100%);
+            margin: 0 auto;
+            display: flex;
+            flex-direction: column;
+            align-items: stretch;
+            gap: 4px;
         }
 
         .report-pick {
@@ -651,35 +814,51 @@ HTML_TEMPLATE = """<!doctype html>
             100% { background: transparent; }
         }
 
+        .table-wrap,
+        .log-box,
+        .blk-preview,
+        .sync-result-text,
+        .save-success-path {
+            cursor: default;
+            user-select: none;
+        }
+
         .table-wrap::-webkit-scrollbar,
         .log-box::-webkit-scrollbar,
         .blk-preview::-webkit-scrollbar,
-        .sync-result-text::-webkit-scrollbar {
+        .sync-result-text::-webkit-scrollbar,
+        .save-success-path::-webkit-scrollbar {
             width: 12px;
             height: 12px;
+            cursor: default;
         }
 
         .table-wrap::-webkit-scrollbar-track,
         .log-box::-webkit-scrollbar-track,
         .blk-preview::-webkit-scrollbar-track,
-        .sync-result-text::-webkit-scrollbar-track {
+        .sync-result-text::-webkit-scrollbar-track,
+        .save-success-path::-webkit-scrollbar-track {
             background: var(--scroll-track);
             border-radius: 999px;
+            cursor: default;
         }
 
         .table-wrap::-webkit-scrollbar-thumb,
         .log-box::-webkit-scrollbar-thumb,
         .blk-preview::-webkit-scrollbar-thumb,
-        .sync-result-text::-webkit-scrollbar-thumb {
+        .sync-result-text::-webkit-scrollbar-thumb,
+        .save-success-path::-webkit-scrollbar-thumb {
             background: var(--scroll-thumb);
             border-radius: 999px;
             border: 2px solid var(--scroll-track);
+            cursor: default;
         }
 
         .table-wrap::-webkit-scrollbar-button,
         .log-box::-webkit-scrollbar-button,
         .blk-preview::-webkit-scrollbar-button,
-        .sync-result-text::-webkit-scrollbar-button {
+        .sync-result-text::-webkit-scrollbar-button,
+        .save-success-path::-webkit-scrollbar-button {
             width: 0;
             height: 0;
             display: none;
@@ -703,11 +882,96 @@ HTML_TEMPLATE = """<!doctype html>
         }
 
         .mini-label {
-            margin-top: 4px;
             color: var(--muted);
-            font-size: 10px;
+            font-size: 12px;
+            font-weight: 500;
             text-align: right;
-            font-family: Consolas, Courier New, monospace;
+            width: 100%;
+        }
+
+        .file-table td:first-child {
+            text-align: center;
+            vertical-align: middle;
+        }
+
+        .video-export-card {
+            width: min(980px, 96vw);
+            height: min(680px, 86vh);
+        }
+
+        .video-export-body {
+            flex: 1;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            padding: 12px 14px;
+        }
+
+        .video-export-config {
+            display: grid;
+            grid-template-columns: 120px 1fr;
+            gap: 8px 10px;
+            align-items: center;
+        }
+
+        .video-export-config .field-row {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .video-export-select {
+            width: 100%;
+            border-radius: 8px;
+            border: 1px solid var(--input-border);
+            background: var(--input-bg);
+            color: var(--fg);
+            padding: 7px 9px;
+            font-size: 12px;
+            outline: none;
+            font-family: "UsmDivinerZh", "Segoe UI", "Noto Sans", "Microsoft YaHei", "PingFang TC", sans-serif;
+        }
+
+        .video-export-list {
+            border: 1px solid var(--line);
+            border-radius: 10px;
+            background: var(--surface);
+            min-height: 0;
+            flex: 1;
+            overflow: auto;
+        }
+
+        .video-export-table {
+            width: 100%;
+            border-collapse: collapse;
+            table-layout: fixed;
+            font-size: 12px;
+        }
+
+        .video-export-table th,
+        .video-export-table td {
+            border-bottom: 1px solid var(--line);
+            padding: 8px;
+            text-align: left;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .video-export-table th {
+            position: sticky;
+            top: 0;
+            background: var(--surface-2);
+            color: var(--muted);
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.2px;
+        }
+
+        .video-export-progress {
+            width: min(180px, 100%);
         }
 
         .modal {
@@ -719,10 +983,23 @@ HTML_TEMPLATE = """<!doctype html>
             justify-content: center;
             padding: 14px;
             z-index: 50;
+            opacity: 1;
+            visibility: visible;
+            pointer-events: auto;
+            transition: opacity 910ms cubic-bezier(0.22, 1, 0.36, 1), visibility 910ms ease;
         }
 
         .hidden {
             display: none !important;
+        }
+
+        /* Keep modal nodes mounted so both show and hide can animate smoothly. */
+        .modal.hidden {
+            display: flex !important;
+            opacity: 0;
+            visibility: hidden;
+            pointer-events: none;
+            transition: opacity 1170ms cubic-bezier(0.22, 1, 0.36, 1), visibility 1170ms ease;
         }
 
         .modal-card {
@@ -735,6 +1012,79 @@ HTML_TEMPLATE = """<!doctype html>
             display: flex;
             flex-direction: column;
             overflow: hidden;
+            opacity: 1;
+            transform: translateY(0) scale(1);
+            transition: transform 1190ms cubic-bezier(0.18, 0.9, 0.22, 1), opacity 910ms ease;
+            transform-origin: 50% 45%;
+        }
+
+        .modal.hidden .modal-card {
+            opacity: 0;
+            transform: translateY(26px) scale(0.94);
+            transition: transform 1530ms cubic-bezier(0.18, 0.9, 0.22, 1), opacity 1170ms ease;
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .modal,
+            .modal-card,
+            .select-trigger,
+            .select-trigger-icon,
+            .select-menu,
+            .select-option,
+            .context-menu,
+            .context-menu-item {
+                transition: none !important;
+            }
+        }
+
+        .context-menu {
+            position: fixed;
+            top: 0;
+            left: 0;
+            background: var(--panel0);
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            padding: 4px 0;
+            z-index: 999;
+            min-width: 140px;
+            box-shadow: 0 4px 12px #00000044;
+            opacity: 0;
+            visibility: hidden;
+            pointer-events: none;
+            transform: translateY(26px) scale(0.94);
+            transform-origin: 50% 45%;
+            transition: opacity 1170ms cubic-bezier(0.22, 1, 0.36, 1), visibility 1170ms ease, transform 1530ms cubic-bezier(0.18, 0.9, 0.22, 1);
+        }
+
+        .context-menu.show {
+            opacity: 1;
+            visibility: visible;
+            pointer-events: auto;
+            transform: translateY(0) scale(1);
+            transition: opacity 910ms cubic-bezier(0.22, 1, 0.36, 1), visibility 910ms ease, transform 1190ms cubic-bezier(0.18, 0.9, 0.22, 1);
+        }
+
+        .context-menu-item {
+            padding: 6px 12px;
+            cursor: pointer;
+            color: var(--fg);
+            font-size: 12px;
+            user-select: none;
+            transition: background 120ms ease;
+        }
+
+        .context-menu-item:hover {
+            background: var(--surface-2);
+        }
+
+        .context-menu-item.disabled {
+            color: var(--muted);
+            cursor: not-allowed;
+            opacity: 0.5;
+        }
+
+        .context-menu-item.disabled:hover {
+            background: transparent;
         }
 
         .modal-head {
@@ -768,11 +1118,43 @@ HTML_TEMPLATE = """<!doctype html>
             height: min(560px, 78vh);
         }
 
+        .confirm-save-card {
+            width: min(640px, 92vw);
+            height: auto;
+            min-height: 0;
+        }
+
+        .save-success-card {
+            width: min(760px, 92vw);
+            height: auto;
+            min-height: 0;
+        }
+
         #sync_result_modal .modal-head {
             justify-content: center;
         }
 
+        #blk_save_confirm_modal .modal-head,
+        #blk_save_success_modal .modal-head {
+            justify-content: center;
+        }
+
+        #blk_sync_success_modal .modal-head {
+            justify-content: center;
+        }
+
         #sync_result_modal .modal-head > span {
+            width: 100%;
+            text-align: center;
+        }
+
+        #blk_save_confirm_modal .modal-head > span,
+        #blk_save_success_modal .modal-head > span {
+            width: 100%;
+            text-align: center;
+        }
+
+        #blk_sync_success_modal .modal-head > span {
             width: 100%;
             text-align: center;
         }
@@ -795,6 +1177,46 @@ HTML_TEMPLATE = """<!doctype html>
             width: 100%;
             flex: 1;
             min-height: 0;
+            resize: none;
+            border-radius: 10px;
+            border: 1px solid var(--line);
+            background: var(--surface);
+            color: var(--fg);
+            padding: 10px;
+            font-family: "UsmDivinerZh", "Segoe UI", "Noto Sans", "Microsoft YaHei", "PingFang TC", sans-serif;
+            font-size: 12px;
+            line-height: 1.45;
+            outline: none;
+        }
+
+        .confirm-save-body,
+        .save-success-body {
+            padding: 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        #blk_sync_success_modal .save-success-body {
+            align-items: center;
+            text-align: center;
+        }
+
+        .confirm-save-message,
+        .save-success-message {
+            color: var(--fg);
+            font-size: 13px;
+            line-height: 1.55;
+            white-space: pre-wrap;
+        }
+
+        #blk_sync_success_modal .save-success-message {
+            text-align: center;
+        }
+
+        .save-success-path {
+            width: 100%;
+            min-height: 92px;
             resize: none;
             border-radius: 10px;
             border: 1px solid var(--line);
@@ -1022,6 +1444,8 @@ HTML_TEMPLATE = """<!doctype html>
             font-size: 12px;
             line-height: 1.45;
             min-height: 0;
+            resize: none;
+            outline: none;
         }
 
         .ok { color: var(--ok); }
@@ -1117,18 +1541,19 @@ HTML_TEMPLATE = """<!doctype html>
 
         #settings_modal .modal-head {
             background: linear-gradient(180deg, var(--panel0), var(--panel1));
-            padding: 16px 14px;
+            padding: 12px 12px;
             border: none;
         }
 
         .settings-content {
             flex: 1;
-            padding: 20px 16px;
+            padding: 12px 12px;
             overflow-y: auto;
         }
 
         #settings_modal .modal-card {
-            height: min(760px, 92vh);
+            width: min(680px, 92vw);
+            height: min(520px, 76vh);
         }
 
         .settings-content::-webkit-scrollbar {
@@ -1171,7 +1596,7 @@ HTML_TEMPLATE = """<!doctype html>
             justify-content: space-between;
             align-items: center;
             gap: 14px;
-            padding: 12px 0;
+            padding: 9px 0;
             border-bottom: 1px solid var(--line);
         }
 
@@ -1260,7 +1685,7 @@ HTML_TEMPLATE = """<!doctype html>
                 <div class="head-top">
                     <div>
                         <h1 class="title" id="title_text">UsmDiviner GUI</h1>
-                        <div class="sub" id="subtitle_text">USM key recovery, extraction, MKV mux, and BLB versions viewer</div>
+                        <div class="sub" id="subtitle_text">USM key recovery, extraction, post-export video workflow, and BLB versions viewer</div>
                     </div>
                     <div class="toolbar-controls">
                         <div class="control">
@@ -1287,18 +1712,18 @@ HTML_TEMPLATE = """<!doctype html>
                         <div class="mode-row">
                             <label id="analysis_mode_text">Mode</label>
                             <div class="mode">
-                                <label><input type="radio" name="input_mode" id="mode_single" value="single" checked onchange="syncInputMode()" /> <span id="single_file_text">Single file</span></label>
-                                <label><input type="radio" name="input_mode" id="mode_batch" value="batch" onchange="syncInputMode()" /> <span id="batch_folder_text">Batch</span></label>
+                                <label><input type="radio" name="input_mode" id="mode_single" value="single" checked onchange="syncInputMode()" /> <span id="single_file_text">File selection</span></label>
+                                <label><input type="radio" name="input_mode" id="mode_batch" value="batch" onchange="syncInputMode()" /> <span id="batch_folder_text">Folder selection</span></label>
                             </div>
                         </div>
                         <div class="form-cols">
                             <div class="form-col">
                                 <div class="row">
                                     <label id="input_label" for="input">Input</label>
-                                    <input id="input" type="text" placeholder="" onchange="previewInput()" />
+                                    <input id="input" type="text" placeholder="" readonly />
                                     <button class="btn" id="input_pick_btn" data-tooltip="Browse to select input" onclick="pickInput()">Browse</button>
                                 </div>
-                                <div class="row">
+                                <div class="row hidden" id="output_row">
                                     <label id="output_label" for="output">Output</label>
                                     <input id="output" type="text" placeholder="" />
                                     <button class="btn" id="output_pick_btn" data-tooltip="Browse to select output folder" onclick="bridge.pickOutput()">Browse</button>
@@ -1337,13 +1762,13 @@ HTML_TEMPLATE = """<!doctype html>
                         </colgroup>
                         <thead>
                             <tr>
-                                <th id="th_progress" data-min="140">Progress</th>
-                                <th id="th_name" data-min="220">Name</th>
-                                <th id="th_size" data-min="110">Size</th>
-                                <th id="th_created" data-min="170">Created</th>
-                                <th id="th_key1" data-min="150">key1_hex_little</th>
-                                <th id="th_key2" data-min="150">key2_hex_little</th>
-                                <th id="th_genshin" data-min="220">genshin_like_key</th>
+                                <th id="th_progress" data-min="140"></th>
+                                <th id="th_name" data-min="220"></th>
+                                <th id="th_size" data-min="110"></th>
+                                <th id="th_created" data-min="170"></th>
+                                <th id="th_key1" data-min="150"></th>
+                                <th id="th_key2" data-min="150"></th>
+                                <th id="th_genshin" data-min="220"></th>
                                 <th id="th_action" data-min="96"></th>
                             </tr>
                         </thead>
@@ -1366,18 +1791,21 @@ HTML_TEMPLATE = """<!doctype html>
 
                     <div class="opts" style="display:none;">
                         <label class="opt"><input id="no_parallel" type="checkbox" /> <span id="opt_no_parallel_text">Disable multiprocessing</span></label>
-                        <label class="opt"><input id="report" type="checkbox" onchange="syncRules()" /> <span id="opt_report_text">Write report.json</span></label>
+                        <label class="opt hidden"><input id="report" type="checkbox" onchange="syncRules()" /> <span id="opt_report_text">Write report.json</span></label>
                         <label class="opt"><input id="fast" type="checkbox" /> <span id="opt_fast_text">Fast key crack</span></label>
                         <label class="opt"><input id="extract_only" type="checkbox" onchange="syncRules()" /> <span id="opt_extract_only_text">Extract only</span></label>
                         <label class="opt"><input id="keep_audio" type="checkbox" /> <span id="opt_keep_audio_text">Keep intermediate audio</span></label>
                         <label class="opt"><input id="no_adx_mask" type="checkbox" /> <span id="opt_no_adx_mask_text">Disable ADX AudioMask</span></label>
-                        <label class="opt"><input id="mux_mkv" type="checkbox" onchange="syncRules()" /> <span id="opt_mux_mkv_text">Mux MKV</span></label>
+                        <label class="opt hidden"><input id="mux_mkv" type="checkbox" onchange="syncRules()" /> <span id="opt_mux_mkv_text">MP4 (Keep MKV Fallback)</span></label>
                     </div>
                 </div>
 
                 <div class="actions actions-bar">
                     <button class="btn" id="open_settings_btn" data-tooltip="Settings" onclick="openSettingsModal()">Settings</button>
                     <button class="btn" id="open_log_btn" data-tooltip="View output logs" onclick="openLogModal()">Logs</button>
+                    <button class="btn hidden" id="open_video_export_btn" data-tooltip="Export videos from extracted IVF/WAV" onclick="openVideoExportModal()">Export Video</button>
+                    <button class="btn hidden" id="export_all_reports_btn" data-tooltip="Export all reports" onclick="exportAllReports()">Export All Reports</button>
+                    <button class="btn hidden" id="export_index_btn" data-tooltip="Export processed index JSON" onclick="exportIndexJson()">Export Index</button>
                     <button id="run" class="btn run" data-tooltip="Start extraction" onclick="runTask()">Run</button>
                 </div>
             </div>
@@ -1415,7 +1843,7 @@ HTML_TEMPLATE = """<!doctype html>
                             <span class="toggle-slider"></span>
                         </label>
                     </div>
-                    <div class="setting-item">
+                    <div class="setting-item hidden">
                         <div class="setting-label">
                             <span class="label-text" id="settings_opt_report_text">Generate reports</span>
                             <span class="label-desc" id="opt_write_report_tooltip">Generate detailed JSON report</span>
@@ -1465,10 +1893,10 @@ HTML_TEMPLATE = """<!doctype html>
                             <span class="toggle-slider"></span>
                         </label>
                     </div>
-                    <div class="setting-item">
+                    <div class="setting-item hidden">
                         <div class="setting-label">
-                            <span class="label-text" id="settings_opt_mux_mkv_text">Mux MKV</span>
-                            <span class="label-desc" id="opt_mux_mkv_tooltip">Mux extracted audio and video into MKV file</span>
+                            <span class="label-text" id="settings_opt_mux_mkv_text">MP4 (Keep MKV Fallback)</span>
+                            <span class="label-desc" id="opt_mux_mkv_tooltip">Create MKV from extracted streams and transcode MP4 as primary output</span>
                         </div>
                         <label class="toggle-switch">
                             <input type="checkbox" id="mux_mkv_toggle" />
@@ -1523,12 +1951,61 @@ HTML_TEMPLATE = """<!doctype html>
                         </div>
                     </div>
                 </div>
-                <pre id="blk_versions_box" class="blk-preview"></pre>
+                <textarea id="blk_versions_box" class="blk-preview" spellcheck="false" oninput="onBlkVersionsEditorInput()"></textarea>
             </div>
             <div class="modal-actions">
                 <button class="btn" id="blk_versions_copy_btn" onclick="copyBlkVersions()">Copy</button>
+                <button class="btn" id="blk_versions_save_btn" onclick="requestSaveBlkVersions()">Save</button>
                 <button class="btn" id="blk_versions_sync_btn" onclick="syncBlkKeysFromUsmRows()">Sync Keys</button>
                 <button class="btn" id="blk_versions_close_btn" onclick="closeBlkVersionsModal()">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="video_export_modal" class="modal hidden">
+        <div class="modal-card video-export-card">
+            <div class="modal-head">
+                <span id="video_export_title">Export Video</span>
+            </div>
+            <div class="video-export-body">
+                <div class="video-export-config">
+                    <label id="video_export_format_label" for="video_export_format">Format</label>
+                    <select id="video_export_format" class="video-export-select">
+                        <option value="mp4">MP4</option>
+                        <option value="mkv">MKV</option>
+                    </select>
+
+                    <label id="video_export_output_label" for="video_export_output">Output</label>
+                    <div class="field-row">
+                        <input id="video_export_output" type="text" placeholder="" />
+                        <button class="btn" id="video_export_output_pick_btn" onclick="pickVideoExportOutput()">Browse</button>
+                    </div>
+                </div>
+
+                <div class="video-export-list">
+                    <table class="video-export-table">
+                        <thead>
+                            <tr>
+                                <th id="video_export_th_name">Name</th>
+                                <th id="video_export_th_status">Status</th>
+                                <th id="video_export_th_progress">Progress</th>
+                            </tr>
+                        </thead>
+                        <tbody id="video_export_table_body"></tbody>
+                    </table>
+                </div>
+
+                <div class="progress-wrap">
+                    <div class="progress-head">
+                        <label id="video_export_overall_label">Overall progress</label>
+                        <div id="video_export_overall_value" class="progress-text">0%</div>
+                    </div>
+                    <div class="progress-track"><div id="video_export_overall_fill" class="progress-fill"></div></div>
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button class="btn" id="video_export_start_btn" onclick="startVideoExport()">Start Export</button>
+                <button class="btn" id="video_export_close_btn" onclick="closeVideoExportModal()">Close</button>
             </div>
         </div>
     </div>
@@ -1550,22 +2027,80 @@ HTML_TEMPLATE = """<!doctype html>
         </div>
     </div>
 
+    <div id="blk_sync_success_modal" class="modal hidden">
+        <div class="modal-card save-success-card">
+            <div class="modal-head">
+                <span id="blk_sync_success_title">BLK Key Sync Complete</span>
+            </div>
+            <div class="save-success-body">
+                <div id="blk_sync_success_message" class="save-success-message"></div>
+            </div>
+            <div class="modal-actions">
+                <button class="btn" id="blk_sync_success_ok_btn" onclick="closeBlkSyncSuccessModal()">OK</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="blk_save_confirm_modal" class="modal hidden">
+        <div class="modal-card confirm-save-card">
+            <div class="modal-head">
+                <span id="blk_save_confirm_title">Continue Save?</span>
+            </div>
+            <div class="confirm-save-body">
+                <div id="blk_save_confirm_message" class="confirm-save-message"></div>
+            </div>
+            <div class="modal-actions">
+                <button class="btn" id="blk_save_confirm_yes_btn" onclick="confirmSaveBlkVersions()">Yes</button>
+                <button class="btn" id="blk_save_confirm_no_btn" onclick="closeBlkSaveConfirmModal()">No</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="blk_save_success_modal" class="modal hidden">
+        <div class="modal-card save-success-card">
+            <div class="modal-head">
+                <span id="blk_save_success_title">versions.json Saved</span>
+            </div>
+            <div class="save-success-body">
+                <div id="blk_save_success_message" class="save-success-message"></div>
+                <textarea id="blk_save_success_path" class="save-success-path" readonly></textarea>
+            </div>
+            <div class="modal-actions">
+                <button class="btn" id="blk_save_reveal_btn" onclick="revealBlkSavedPath()">Open Save Path</button>
+                <button class="btn" id="blk_save_success_ok_btn" onclick="closeBlkSaveSuccessModal()">OK</button>
+            </div>
+        </div>
+    </div>
+
     <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
     <script>
         const I18N = JSON.parse(__TRANSLATIONS_JSON__);
         let bridge = null;
         let fileRows = new Map();
         let logLines = [];
+        let selectedInputFiles = [];
         let blkVersionsData = null;
+        let blkVersionsEditorText = "";
         let blkSearchQuery = "";
         let blkSearchCaseSensitive = false;
         let blkSearchWholeWord = false;
         let blkSearchMatches = [];
         let blkSearchIndex = -1;
         let blkParsePending = false;
+        let blkSaveSuccessPath = "";
+        let blkSaveCanReveal = false;
+        let videoExportCandidates = [];
+        let videoExportRows = new Map();
+        let videoExportRunning = false;
+        let rowProgressFrame = null;
+        let overallProgressFrame = null;
+        let overallProgressCurrent = 0;
+        let overallProgressTarget = 0;
+        let isTaskRunning = false;
         let copyToastTimer = null;
         let lastLogLine = null;
         let lastLogTs = 0;
+        let customSelectInstances = new Map();
 
         function byId(id) { return document.getElementById(id); }
 
@@ -1597,6 +2132,93 @@ HTML_TEMPLATE = """<!doctype html>
             el.setAttribute("data-tooltip", text || "");
             el.setAttribute("aria-label", text || "");
             el.removeAttribute("title");
+        }
+
+        function closeCustomSelects(exceptId = null) {
+            customSelectInstances.forEach((instance, selectId) => {
+                if (!instance || !instance.shell) return;
+                instance.shell.classList.toggle("open", !!exceptId && selectId === exceptId);
+                instance.trigger.setAttribute("aria-expanded", instance.shell.classList.contains("open") ? "true" : "false");
+            });
+        }
+
+        function refreshCustomSelect(selectId) {
+            const instance = customSelectInstances.get(selectId);
+            if (!instance) return;
+            const { select, label, menu } = instance;
+            const options = Array.from(select.options || []);
+            const selected = options.find((option) => option.value === select.value) || options[select.selectedIndex] || null;
+            label.textContent = selected ? String(selected.textContent || "") : "";
+            menu.innerHTML = "";
+            options.forEach((option) => {
+                const item = document.createElement("button");
+                item.type = "button";
+                item.className = "select-option" + (option.value === select.value ? " active" : "");
+                item.setAttribute("role", "option");
+                item.setAttribute("aria-selected", option.value === select.value ? "true" : "false");
+                item.innerHTML = `<span>${escapeHtml(option.textContent || "")}</span><span class="select-option-check">✓</span>`;
+                item.addEventListener("click", () => {
+                    select.value = option.value;
+                    refreshCustomSelect(selectId);
+                    closeCustomSelects();
+                    select.dispatchEvent(new Event("change", { bubbles: true }));
+                });
+                menu.appendChild(item);
+            });
+        }
+
+        function refreshAllCustomSelects() {
+            customSelectInstances.forEach((_, selectId) => refreshCustomSelect(selectId));
+        }
+
+        function setupCustomSelect(selectId) {
+            const select = byId(selectId);
+            if (!select || customSelectInstances.has(selectId)) return;
+
+            const shell = document.createElement("div");
+            shell.className = "select-shell";
+            if (select.classList.contains("video-export-select")) {
+                shell.classList.add("video-export-shell");
+            } else {
+                shell.classList.add("toolbar-select-shell");
+            }
+
+            const trigger = document.createElement("button");
+            trigger.type = "button";
+            trigger.className = "select-trigger";
+            trigger.setAttribute("aria-haspopup", "listbox");
+            trigger.setAttribute("aria-expanded", "false");
+
+            const label = document.createElement("span");
+            label.className = "select-trigger-label";
+            const icon = document.createElement("span");
+            icon.className = "select-trigger-icon";
+            trigger.appendChild(label);
+            trigger.appendChild(icon);
+
+            const menu = document.createElement("div");
+            menu.className = "select-menu";
+            menu.setAttribute("role", "listbox");
+
+            select.parentNode.insertBefore(shell, select);
+            shell.appendChild(select);
+            shell.appendChild(trigger);
+            shell.appendChild(menu);
+            select.classList.add("native-select-hidden");
+
+            customSelectInstances.set(selectId, { select, shell, trigger, label, menu });
+
+            trigger.addEventListener("click", (event) => {
+                event.preventDefault();
+                const willOpen = !shell.classList.contains("open");
+                closeCustomSelects(willOpen ? selectId : null);
+            });
+
+            refreshCustomSelect(selectId);
+        }
+
+        function setupCustomSelects() {
+            ["lang_select", "theme_select", "video_export_format"].forEach(setupCustomSelect);
         }
 
         function blkEntryCount(value) {
@@ -1684,6 +2306,7 @@ HTML_TEMPLATE = """<!doctype html>
                     emptyOverlay.textContent = dict.table_empty;
                     emptyOverlay.classList.remove("hidden");
                 }
+                renderPostProcessButtons();
                 return;
             }
             if (emptyOverlay) {
@@ -1691,6 +2314,8 @@ HTML_TEMPLATE = """<!doctype html>
             }
             rows.forEach((row) => {
                 row.progress = Number(row.progress || 0);
+                row.progressDisplay = Number(row.progress || 0);
+                row.progressTarget = Number(row.progress || 0);
                 fileRows.set(row.id, row);
                 const tr = document.createElement("tr");
                 tr.id = `row_${row.id}`;
@@ -1702,21 +2327,21 @@ HTML_TEMPLATE = """<!doctype html>
                     { text: row.name, title: row.path },
                     { text: formatBytes(row.size_bytes) },
                     { text: formatDate(row.created_ts) },
-                    { id: `${row.id}_key1`, text: row.key1_hex_little || "—" },
-                    { id: `${row.id}_key2`, text: row.key2_hex_little || "—" },
-                    { id: `${row.id}_genshin`, text: row.genshin_like_key ?? "—" },
+                    { id: `${row.id}_key1`, text: row.key1_hex_little || "" },
+                    { id: `${row.id}_key2`, text: row.key2_hex_little || "" },
+                    { id: `${row.id}_genshin`, text: (row.usm_decrypt_key ?? row.genshin_like_key ?? "") },
                     {
                         id: `${row.id}_action`,
-                        html: "—",
+                        html: "",
                     },
                 ];
                 cells.forEach((cell) => {
                     const td = document.createElement("td");
-                    td.className = "mono";
                     if (cell.html) {
                         td.className = cell.id && cell.id.endsWith("_action") ? "row-action" : "";
                         td.innerHTML = cell.html;
                     } else {
+                        if (cell.mono) td.className = "mono";
                         td.textContent = cell.text;
                     }
                     if (cell.title) td.title = cell.title;
@@ -1730,6 +2355,26 @@ HTML_TEMPLATE = """<!doctype html>
                 updateReportAction(row.id, row.status || "pending");
                 body.appendChild(tr);
             });
+            renderPostProcessButtons();
+        }
+
+        function hasFinishedProcessingRows() {
+            if (!fileRows || fileRows.size <= 0) return false;
+            for (const row of fileRows.values()) {
+                const status = String(row && row.status || "pending");
+                if (!(status === "ok" || status === "skipped" || status === "error")) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        function renderPostProcessButtons() {
+            const show = !isTaskRunning && hasFinishedProcessingRows();
+            const exportReportsBtn = byId("export_all_reports_btn");
+            const exportIndexBtn = byId("export_index_btn");
+            if (exportReportsBtn) exportReportsBtn.classList.toggle("hidden", !show);
+            if (exportIndexBtn) exportIndexBtn.classList.toggle("hidden", !show);
         }
 
         function updateReportAction(id, status) {
@@ -1743,7 +2388,7 @@ HTML_TEMPLATE = """<!doctype html>
             }
             if (status === "ok" || status === "skipped" || status === "error") {
                 const dict = t(currentLang());
-                cell.innerHTML = `<button class="btn mini-btn" data-tooltip="${dict.save_report_tooltip}" aria-label="${dict.save_report_tooltip}" onclick="saveReportForRow('${id}')">${dict.save_report}</button>`;
+                cell.innerHTML = `<button class="btn mini-btn" onclick="saveReportForRow('${id}')">${dict.save_report}</button>`;
             } else {
                 cell.textContent = "—";
             }
@@ -1795,6 +2440,21 @@ HTML_TEMPLATE = """<!doctype html>
             }, 1200);
         }
 
+        function getBlkVersionsText() {
+            const box = byId("blk_versions_box");
+            if (box) {
+                blkVersionsEditorText = String(box.value || "");
+            }
+            return String(blkVersionsEditorText || "");
+        }
+
+        function onBlkVersionsEditorInput() {
+            blkVersionsEditorText = getBlkVersionsText();
+            if (blkSearchQuery) {
+                updateBlkSearchMatches();
+            }
+        }
+
         function openSyncResultModal(note, text) {
             const noteEl = byId("sync_result_note");
             const textEl = byId("sync_result_text");
@@ -1807,16 +2467,158 @@ HTML_TEMPLATE = """<!doctype html>
             byId("sync_result_modal").classList.add("hidden");
         }
 
+        function openBlkSyncSuccessModal(message) {
+            setText("blk_sync_success_message", message || "");
+            byId("blk_sync_success_modal").classList.remove("hidden");
+        }
+
+        function closeBlkSyncSuccessModal() {
+            byId("blk_sync_success_modal").classList.add("hidden");
+        }
+
+        function openBlkSaveConfirmModal(title, message) {
+            setText("blk_save_confirm_title", title || "");
+            setText("blk_save_confirm_message", message || "");
+            byId("blk_save_confirm_modal").classList.remove("hidden");
+        }
+
+        function closeBlkSaveConfirmModal() {
+            byId("blk_save_confirm_modal").classList.add("hidden");
+        }
+
+        function openBlkSaveSuccessModal(message, path, canReveal, title = null) {
+            blkSaveSuccessPath = String(path || "");
+            blkSaveCanReveal = !!canReveal;
+            if (title) {
+                setText("blk_save_success_title", title);
+            }
+            setText("blk_save_success_message", message || "");
+            const pathEl = byId("blk_save_success_path");
+            if (pathEl) {
+                pathEl.value = blkSaveSuccessPath;
+                pathEl.classList.toggle("hidden", !blkSaveSuccessPath);
+            }
+            const revealBtn = byId("blk_save_reveal_btn");
+            if (revealBtn) {
+                revealBtn.classList.toggle("hidden", !blkSaveCanReveal);
+            }
+            byId("blk_save_success_modal").classList.remove("hidden");
+        }
+
+        function closeBlkSaveSuccessModal() {
+            byId("blk_save_success_modal").classList.add("hidden");
+        }
+
+        function onBlkSavePromptReady(payloadJson) {
+            try {
+                const payload = JSON.parse(payloadJson || "{}");
+                openBlkSaveConfirmModal(payload.title || "", payload.message || "");
+            } catch (_) {
+                openBlkSaveConfirmModal("", payloadJson || "");
+            }
+        }
+
+        function onBlkSaveCompleted(payloadJson) {
+            const dict = t(currentLang());
+            try {
+                const payload = JSON.parse(payloadJson || "{}");
+                closeBlkSaveConfirmModal();
+                openBlkSaveSuccessModal(
+                    payload.message || dict.blk_versions_saved_message || "",
+                    payload.path || "",
+                    !!payload.can_reveal,
+                    payload.title || dict.blk_versions_saved_title || ""
+                );
+            } catch (_) {
+                closeBlkSaveConfirmModal();
+                openBlkSaveSuccessModal(
+                    dict.blk_versions_saved_message || "",
+                    "",
+                    false,
+                    dict.blk_versions_saved_title || ""
+                );
+            }
+        }
+
+        function onIndexExportResult(payloadJson) {
+            const dict = t(currentLang());
+            try {
+                const payload = JSON.parse(payloadJson || "{}");
+                openBlkSaveSuccessModal(
+                    payload.message || dict.index_no_data || "",
+                    payload.path || "",
+                    !!payload.can_reveal,
+                    payload.title || dict.index_export_result_title || ""
+                );
+            } catch (_) {
+                openBlkSaveSuccessModal(
+                    dict.index_no_data || "",
+                    "",
+                    false,
+                    dict.index_export_failed_title || ""
+                );
+            }
+        }
+
+        function requestSaveBlkVersions() {
+            const dict = t(currentLang());
+            const text = getBlkVersionsText();
+            if (!text.trim()) {
+                showCopyToast(dict.blk_versions_modal_empty);
+                return;
+            }
+            if (!bridge || !bridge.requestSaveBlkVersions) {
+                showCopyToast(dict.blk_versions_sync_no_bridge);
+                return;
+            }
+            bridge.requestSaveBlkVersions(text);
+        }
+
+        function confirmSaveBlkVersions() {
+            if (!bridge || !bridge.confirmSaveBlkVersions) return;
+            bridge.confirmSaveBlkVersions(getBlkVersionsText());
+        }
+
+        function revealBlkSavedPath() {
+            if (!blkSaveCanReveal || !blkSaveSuccessPath || !bridge || !bridge.revealSavedPath) {
+                return;
+            }
+            bridge.revealSavedPath(blkSaveSuccessPath);
+        }
+
         function onSyncResultReady(content) {
             const dict = t(currentLang());
-            openSyncResultModal(dict.blk_sync_popup_note || "", content || dict.blk_sync_popup_empty || "");
+            let payload = null;
+            try {
+                payload = JSON.parse(content || "{}");
+            } catch (_) {
+                payload = null;
+            }
+
+            if (!payload || typeof payload !== "object") {
+                openSyncResultModal(dict.blk_sync_popup_note || "", content || dict.blk_sync_popup_empty || "");
+                return;
+            }
+
+            const unresolvedCount = Number(payload.unresolved_count || 0);
+            const detailsText = String(payload.details_text || "");
+            const successMessage = String(payload.success_message || dict.blk_sync_all_resolved_message || "");
+
+            if (unresolvedCount > 0) {
+                closeBlkSyncSuccessModal();
+                openSyncResultModal(dict.blk_sync_popup_note || "", detailsText || dict.blk_sync_popup_empty || "");
+                return;
+            }
+
+            closeSyncResultModal();
+            openBlkSyncSuccessModal(successMessage);
         }
 
         function initColumnResizers() {
             const headers = Array.from(document.querySelectorAll(".file-table thead th"));
             const cols = Array.from(document.querySelectorAll(".file-table colgroup col"));
             headers.forEach((th, index) => {
-                if (th.id === "th_action") return;
+                if (th.id === "th_action" || th.id === "th_progress") return;
                 if (th.querySelector(".resizer")) return;
                 const col = cols[index];
                 if (!col) return;
@@ -1840,7 +2642,7 @@ HTML_TEMPLATE = """<!doctype html>
                     const total = cols.reduce((sum, c) => sum + (parseFloat(c.style.width) || c.getBoundingClientRect().width || 0), 0);
                     const next = Math.max(total, wrap.clientWidth || 0);
                     table.style.width = `${Math.max(1, Math.round(next))}px`;
-                    table.style.minWidth = `${Math.max(1, Math.round(next))}px`;
+                    table.style.minWidth = `${Math.max(1, Math.round(wrap.clientWidth || 1))}px`;
                 };
                 const onMove = (e) => {
                     const dx = e.clientX - startX;
@@ -1878,30 +2680,212 @@ HTML_TEMPLATE = """<!doctype html>
                 tr.className = data.status === "ok" ? "ok" : data.status === "skipped" ? "warn" : data.status === "error" ? "err" : "pending";
                 updateReportAction(id, data.status);
             }
-            if (data.key1_hex_little !== undefined && cells.key1) cells.key1.textContent = data.key1_hex_little || "—";
-            if (data.key2_hex_little !== undefined && cells.key2) cells.key2.textContent = data.key2_hex_little || "—";
-            if (data.genshin_like_key !== undefined && cells.genshin) cells.genshin.textContent = data.genshin_like_key ?? "—";
+            if (data.key1_hex_little !== undefined && cells.key1) cells.key1.textContent = data.key1_hex_little || "";
+            if (data.key2_hex_little !== undefined && cells.key2) cells.key2.textContent = data.key2_hex_little || "";
+            if (cells.genshin) {
+                const hasNew = data.usm_decrypt_key !== undefined;
+                const hasLegacy = data.genshin_like_key !== undefined;
+                if (hasNew || hasLegacy) {
+                    cells.genshin.textContent = data.usm_decrypt_key ?? data.genshin_like_key ?? "";
+                }
+            }
+            renderPostProcessButtons();
+        }
+
+        function animateTowards(current, target, factor = 0.2) {
+            const delta = target - current;
+            if (Math.abs(delta) < 0.2) return target;
+            return current + delta * factor;
+        }
+
+        function _pumpRowProgress() {
+            rowProgressFrame = null;
+            let hasPending = false;
+            fileRows.forEach((row, id) => {
+                const target = Number(row.progressTarget ?? row.progress ?? 0);
+                const current = Number(row.progressDisplay ?? row.progress ?? 0);
+                const next = animateTowards(current, target, 0.24);
+                const fill = byId(`${id}_progress_fill`);
+                const text = byId(`${id}_progress_text`);
+                if (fill) fill.style.width = `${next}%`;
+                if (text) text.textContent = `${Math.round(next)}%`;
+                row.progressDisplay = next;
+                row.progress = target;
+                fileRows.set(id, row);
+                if (Math.abs(target - next) >= 0.2) {
+                    hasPending = true;
+                }
+            });
+            if (hasPending) {
+                rowProgressFrame = requestAnimationFrame(_pumpRowProgress);
+            }
         }
 
         function setFileProgress(id, progress) {
             const value = Math.max(0, Math.min(100, Number(progress || 0)));
-            const fill = byId(`${id}_progress_fill`);
-            const text = byId(`${id}_progress_text`);
-            if (fill) fill.style.width = `${value}%`;
-            if (text) text.textContent = `${value}%`;
             const row = fileRows.get(id);
-            if (row) {
-                row.progress = value;
-                fileRows.set(id, row);
+            if (!row) return;
+            row.progressTarget = value;
+            if (row.progressDisplay === undefined || row.progressDisplay === null) {
+                row.progressDisplay = Number(row.progress || 0);
+            }
+            fileRows.set(id, row);
+            if (!rowProgressFrame) {
+                rowProgressFrame = requestAnimationFrame(_pumpRowProgress);
+            }
+        }
+
+        function _pumpOverallProgress() {
+            overallProgressFrame = null;
+            overallProgressCurrent = animateTowards(overallProgressCurrent, overallProgressTarget, 0.22);
+            byId("overall_progress_fill").style.width = `${overallProgressCurrent}%`;
+            byId("overall_progress_value").textContent = `${Math.round(overallProgressCurrent)}%`;
+            if (Math.abs(overallProgressTarget - overallProgressCurrent) >= 0.2) {
+                overallProgressFrame = requestAnimationFrame(_pumpOverallProgress);
             }
         }
 
         function setOverallProgress(done, total) {
             const t = Math.max(0, Number(total || 0));
             const d = Math.max(0, Math.min(t, Number(done || 0)));
-            const pct = t > 0 ? Math.round((d * 100) / t) : 0;
-            byId("overall_progress_fill").style.width = `${pct}%`;
-            byId("overall_progress_value").textContent = `${pct}%`;
+            overallProgressTarget = t > 0 ? (d * 100) / t : 0;
+            if (!overallProgressFrame) {
+                overallProgressFrame = requestAnimationFrame(_pumpOverallProgress);
+            }
+        }
+
+        function renderVideoExportButton() {
+            const btn = byId("open_video_export_btn");
+            if (!btn) return;
+            btn.classList.toggle("hidden", !(videoExportCandidates.length > 0));
+        }
+
+        function renderVideoExportRows() {
+            const dict = t(currentLang());
+            const body = byId("video_export_table_body");
+            if (!body) return;
+            body.innerHTML = "";
+            videoExportRows.clear();
+            for (const item of videoExportCandidates) {
+                const id = String(item.id || item.name || Math.random());
+                videoExportRows.set(id, { id, progress: 0, status: dict.video_export_status_pending || "Pending" });
+                const tr = document.createElement("tr");
+                tr.id = `video_export_row_${id}`;
+                tr.innerHTML = `
+                    <td title="${String(item.file || item.name || "")}">${String(item.name || "—")}</td>
+                    <td id="video_export_status_${id}">${dict.video_export_status_pending || "Pending"}</td>
+                    <td>
+                        <div class="cell-progress video-export-progress">
+                            <div class="mini-track"><div id="video_export_fill_${id}" class="mini-fill" style="width:0%"></div></div>
+                            <div id="video_export_text_${id}" class="mini-label">0%</div>
+                        </div>
+                    </td>
+                `;
+                body.appendChild(tr);
+            }
+            setVideoExportOverallProgress(0, Math.max(videoExportCandidates.length, 1));
+        }
+
+        function setVideoExportOverallProgress(done, total) {
+            const t = Math.max(1, Number(total || 1));
+            const d = Math.max(0, Math.min(t, Number(done || 0)));
+            const pct = Math.round((d * 100) / t);
+            const fill = byId("video_export_overall_fill");
+            const text = byId("video_export_overall_value");
+            if (fill) fill.style.width = `${pct}%`;
+            if (text) text.textContent = `${pct}%`;
+        }
+
+        function updateVideoExportRowProgress(id, progress, status) {
+            const value = Math.max(0, Math.min(100, Number(progress || 0)));
+            const fill = byId(`video_export_fill_${id}`);
+            const text = byId(`video_export_text_${id}`);
+            const statusEl = byId(`video_export_status_${id}`);
+            if (fill) fill.style.width = `${value}%`;
+            if (text) text.textContent = `${Math.round(value)}%`;
+            if (statusEl && status) statusEl.textContent = String(status);
+        }
+
+        function openVideoExportModal() {
+            renderVideoExportRows();
+            byId("video_export_modal").classList.remove("hidden");
+        }
+
+        function closeVideoExportModal() {
+            if (videoExportRunning) return;
+            byId("video_export_modal").classList.add("hidden");
+        }
+
+        function pickVideoExportOutput() {
+            if (!bridge || !bridge.pickVideoExportOutput) return;
+            bridge.pickVideoExportOutput();
+        }
+
+        function startVideoExport() {
+            if (!bridge || !bridge.startVideoExport || videoExportRunning) return;
+            const out = String(byId("video_export_output").value || "").trim();
+            if (!out) {
+                showCopyToast(t(currentLang()).video_export_output_required || "");
+                return;
+            }
+            videoExportRunning = true;
+            byId("video_export_start_btn").disabled = true;
+            const payload = {
+                format: byId("video_export_format").value,
+                output_dir: out,
+                candidates: videoExportCandidates,
+            };
+            bridge.startVideoExport(JSON.stringify(payload));
+        }
+
+        function onVideoExportReady(payloadJson) {
+            let payload = {};
+            try {
+                payload = JSON.parse(payloadJson || "{}");
+            } catch (_) {
+                payload = {};
+            }
+            videoExportCandidates = Array.isArray(payload.candidates) ? payload.candidates : [];
+            const out = String(payload.default_output_dir || "");
+            if (byId("video_export_output") && out) {
+                byId("video_export_output").value = out;
+            }
+            renderVideoExportButton();
+        }
+
+        function onVideoExportProgress(payloadJson) {
+            let payload = {};
+            try {
+                payload = JSON.parse(payloadJson || "{}");
+            } catch (_) {
+                payload = {};
+            }
+            updateVideoExportRowProgress(payload.id, payload.progress, payload.status);
+            setVideoExportOverallProgress(payload.done || 0, payload.total || 1);
+        }
+
+        function onVideoExportFinished(payloadJson) {
+            const dict = t(currentLang());
+            videoExportRunning = false;
+            byId("video_export_start_btn").disabled = false;
+            try {
+                const payload = JSON.parse(payloadJson || "{}");
+                closeVideoExportModal();
+                openBlkSaveSuccessModal(
+                    payload.message || "",
+                    payload.path || "",
+                    !!payload.can_reveal,
+                    payload.title || dict.video_export_result_title || ""
+                );
+            } catch (_) {
+                closeVideoExportModal();
+                openBlkSaveSuccessModal(
+                    dict.video_export_failed || "",
+                    "",
+                    false,
+                    dict.video_export_result_title || ""
+                );
+            }
         }
 
         function refreshFileList() {
@@ -1957,6 +2941,8 @@ HTML_TEMPLATE = """<!doctype html>
             setText("settings_opt_mux_mkv_text", dict.mux_mkv);
             setText("settings_opt_manual_key_text", dict.manual_key);
             setText("open_log_btn", dict.open_log);
+            setText("open_video_export_btn", dict.export_video || "Export Video");
+            setText("export_all_reports_btn", dict.export_all_reports || "Export All Reports");
             setText("log_window_title", dict.log_window);
             setText("export_log_btn", dict.export_log);
             setText("clear_log_btn", dict.clear_log);
@@ -1967,14 +2953,34 @@ HTML_TEMPLATE = """<!doctype html>
             setText("open_versions_btn", dict.btn_view_versions);
             setText("blk_versions_title", dict.blk_versions_title);
             setText("blk_versions_copy_btn", dict.blk_versions_copy);
+            setText("blk_versions_save_btn", dict.blk_versions_save || dict.save_report);
             setText("blk_versions_sync_btn", dict.blk_versions_sync);
             setText("blk_versions_close_btn", dict.close);
             setText("sync_result_title", dict.blk_sync_popup_title || dict.blk_versions_sync);
             setText("sync_result_close_btn", dict.close);
             setText("sync_result_note", dict.blk_sync_popup_note || "");
+            setText("blk_sync_success_title", dict.blk_sync_success_title || dict.blk_versions_sync);
+            setText("blk_sync_success_ok_btn", dict.settings_ok || "OK");
+            setText("blk_save_confirm_title", dict.blk_versions_save_confirm_title || dict.blk_versions_title);
+            setText("blk_save_confirm_yes_btn", dict.yes);
+            setText("blk_save_confirm_no_btn", dict.no);
+            setText("blk_save_success_title", dict.blk_versions_saved_title || dict.blk_versions_title);
+            setText("blk_save_reveal_btn", dict.blk_versions_saved_reveal || dict.browse);
+            setText("blk_save_success_ok_btn", dict.settings_ok || "OK");
+            setText("video_export_title", dict.video_export_title || "Export Video");
+            setText("video_export_format_label", dict.video_export_format_label || "Format");
+            setText("video_export_output_label", dict.video_export_output_label || "Output");
+            setText("video_export_output_pick_btn", dict.browse || "Browse");
+            setText("video_export_th_name", dict.table_name || "Name");
+            setText("video_export_th_status", dict.video_export_status || "Status");
+            setText("video_export_th_progress", dict.table_progress || "Progress");
+            setText("video_export_overall_label", dict.overall_progress || "Overall progress");
+            setText("video_export_start_btn", dict.video_export_start || "Start Export");
+            setText("video_export_close_btn", dict.close || "Close");
             setPlaceholder("output", dict.placeholder_output);
             setPlaceholder("report_output", dict.placeholder_report_output);
             setPlaceholder("blk_input", dict.placeholder_blk_input);
+            setPlaceholder("video_export_output", dict.video_export_output_placeholder || "");
             setPlaceholder("blk_search_input", dict.blk_search_placeholder);
             setTooltip("blk_search_case_btn", dict.blk_search_match_case);
             setTooltip("blk_search_word_btn", dict.blk_search_match_whole);
@@ -1991,6 +2997,9 @@ HTML_TEMPLATE = """<!doctype html>
             setText("settings_cancel_btn", dict.settings_cancel);
             setTooltip("open_settings_btn", dict.btn_settings_tooltip);
             setTooltip("open_log_btn", dict.btn_logs_tooltip);
+            setTooltip("open_video_export_btn", dict.btn_export_video_tooltip || dict.export_video);
+            setTooltip("export_all_reports_btn", dict.btn_export_all_reports_tooltip || dict.export_all_reports);
+            setTooltip("export_index_btn", dict.btn_export_index_tooltip || dict.export_index);
             setTooltip("run", dict.btn_run_tooltip);
             setTooltip("export_log_btn", dict.btn_export_log_tooltip);
             setTooltip("clear_log_btn", dict.btn_clear_log_tooltip);
@@ -1998,10 +3007,14 @@ HTML_TEMPLATE = """<!doctype html>
             setTooltip("settings_ok_btn", dict.btn_settings_ok_tooltip);
             setTooltip("settings_cancel_btn", dict.btn_settings_cancel_tooltip);
             setTooltip("blk_versions_copy_btn", dict.btn_blk_versions_copy_tooltip);
+            setTooltip("blk_versions_save_btn", dict.btn_blk_versions_save_tooltip || dict.save_report_tooltip);
             setTooltip("blk_versions_sync_btn", dict.btn_blk_versions_sync_tooltip);
             setTooltip("blk_versions_close_btn", dict.btn_blk_versions_close_tooltip);
             byId("open_settings_btn").textContent = dict.settings_title;
             byId("open_log_btn").textContent = dict.open_log;
+            byId("open_video_export_btn").textContent = dict.export_video || "Export Video";
+            byId("export_all_reports_btn").textContent = dict.export_all_reports || "Export All Reports";
+            byId("export_index_btn").textContent = dict.export_index || "Export Index";
             byId("run").textContent = dict.run;
             document.getElementById("opt_disable_multiprocessing_tooltip").textContent = dict.opt_disable_multiprocessing_tooltip;
             document.getElementById("opt_write_report_tooltip").textContent = dict.opt_write_report_tooltip;
@@ -2011,6 +3024,11 @@ HTML_TEMPLATE = """<!doctype html>
             document.getElementById("opt_disable_adx_mask_tooltip").textContent = dict.opt_disable_adx_mask_tooltip;
             document.getElementById("opt_mux_mkv_tooltip").textContent = dict.opt_mux_mkv_tooltip;
             document.getElementById("opt_manual_key_tooltip").textContent = dict.opt_manual_key_tooltip;
+            if (selectedInputFiles.length > 0) {
+                applyInputSelection(selectedInputFiles, "");
+            }
+            refreshContextMenuLanguage();
+            refreshAllCustomSelects();
             refreshFileList();
             syncInputMode(true);
             syncRules();
@@ -2019,7 +3037,6 @@ HTML_TEMPLATE = """<!doctype html>
             renderBlkModal();
             updateBlkSearchStatus();
             renderLogBox();
-            initColumnResizers();
         }
 
         function appendLog(line) {
@@ -2077,6 +3094,16 @@ HTML_TEMPLATE = """<!doctype html>
             bridge.exportLog(content, name);
         }
 
+        function exportIndexJson() {
+            if (!bridge || !bridge.exportIndexJson) return;
+            bridge.exportIndexJson();
+        }
+
+        function exportAllReports() {
+            if (!bridge || !bridge.exportAllReports) return;
+            bridge.exportAllReports();
+        }
+
         function openLogModal() {
             byId("log_modal").classList.remove("hidden");
             renderLogBox();
@@ -2111,44 +3138,62 @@ HTML_TEMPLATE = """<!doctype html>
         }
 
         function syncCheckboxesToToggles() {
-            byId("no_parallel_toggle").checked = byId("no_parallel").checked;
-            byId("report_toggle").checked = byId("report").checked;
-            byId("fast_toggle").checked = byId("fast").checked;
-            byId("extract_only_toggle").checked = byId("extract_only").checked;
-            byId("keep_audio_toggle").checked = byId("keep_audio").checked;
-            byId("no_adx_mask_toggle").checked = byId("no_adx_mask").checked;
-            byId("mux_mkv_toggle").checked = byId("mux_mkv").checked;
+            if (byId("no_parallel_toggle") && byId("no_parallel")) byId("no_parallel_toggle").checked = byId("no_parallel").checked;
+            if (byId("fast_toggle") && byId("fast")) byId("fast_toggle").checked = byId("fast").checked;
+            if (byId("extract_only_toggle") && byId("extract_only")) byId("extract_only_toggle").checked = byId("extract_only").checked;
+            if (byId("keep_audio_toggle") && byId("keep_audio")) byId("keep_audio_toggle").checked = byId("keep_audio").checked;
+            if (byId("no_adx_mask_toggle") && byId("no_adx_mask")) byId("no_adx_mask_toggle").checked = byId("no_adx_mask").checked;
             byId("manual_key_toggle").checked = !!(byId("key") && byId("key").value.trim());
         }
 
         function syncTogglesToCheckboxes() {
-            byId("no_parallel").checked = byId("no_parallel_toggle").checked;
-            byId("report").checked = byId("report_toggle").checked;
-            byId("fast").checked = byId("fast_toggle").checked;
-            byId("extract_only").checked = byId("extract_only_toggle").checked;
-            byId("keep_audio").checked = byId("keep_audio_toggle").checked;
-            byId("no_adx_mask").checked = byId("no_adx_mask_toggle").checked;
-            byId("mux_mkv").checked = byId("mux_mkv_toggle").checked;
+            if (byId("no_parallel") && byId("no_parallel_toggle")) byId("no_parallel").checked = byId("no_parallel_toggle").checked;
+            if (byId("fast") && byId("fast_toggle")) byId("fast").checked = byId("fast_toggle").checked;
+            if (byId("extract_only") && byId("extract_only_toggle")) byId("extract_only").checked = byId("extract_only_toggle").checked;
+            if (byId("keep_audio") && byId("keep_audio_toggle")) byId("keep_audio").checked = byId("keep_audio_toggle").checked;
+            if (byId("no_adx_mask") && byId("no_adx_mask_toggle")) byId("no_adx_mask").checked = byId("no_adx_mask_toggle").checked;
             if (!byId("manual_key_toggle").checked && byId("key")) {
                 byId("key").value = "";
             }
         }
 
         function setRunning(running) {
+            isTaskRunning = !!running;
             const run = byId("run");
             const dict = t(currentLang());
             run.disabled = running;
             run.textContent = running ? dict.running : dict.run;
+            renderPostProcessButtons();
         }
 
         function setField(field, value) {
             const el = byId(field);
-            if (el) el.value = value;
+            if (field === "input") {
+                const text = String(value || "");
+                let parsed = null;
+                if (text.trim().startsWith("{")) {
+                    try {
+                        parsed = JSON.parse(text);
+                    } catch (_) {
+                        parsed = null;
+                    }
+                }
+                if (parsed && Array.isArray(parsed.files)) {
+                    applyInputSelection(parsed.files, parsed.display || "");
+                } else if (el) {
+                    selectedInputFiles = [];
+                    el.value = text;
+                    el.title = text;
+                }
+            } else if (el) {
+                el.value = value;
+            }
             if (field === "input") {
                 previewInput();
             } else if (field === "blk_input") {
                 blkParsePending = true;
                 blkVersionsData = null;
+                blkVersionsEditorText = "";
                 renderBlkStatus();
                 renderBlkModal();
             }
@@ -2178,7 +3223,8 @@ HTML_TEMPLATE = """<!doctype html>
                 summary.textContent = dict.blk_versions_modal_empty;
                 summaryPath.textContent = dict.blk_versions_modal_path
                     .replace("{path}", String(blkPath || "—"));
-                box.textContent = "";
+                blkVersionsEditorText = "";
+                box.value = "";
                 blkSearchMatches = [];
                 blkSearchIndex = -1;
                 updateBlkSearchStatus();
@@ -2197,26 +3243,12 @@ HTML_TEMPLATE = """<!doctype html>
                 .replace("{game_version}", String(gameVersion || "—"));
             summaryPath.textContent = dict.blk_versions_modal_path
                 .replace("{path}", String(blkPath || "—"));
-            const raw = String(blkVersionsData.versions_json || "");
-            if (!blkSearchQuery) {
-                box.textContent = raw;
-                blkSearchMatches = [];
-                blkSearchIndex = -1;
-                updateBlkSearchStatus();
-                return;
+            const raw = blkVersionsEditorText || String(blkVersionsData.versions_json || "");
+            if (box.value !== raw) {
+                box.value = raw;
             }
-            const highlighted = highlightMatches(raw, blkSearchQuery);
-            box.innerHTML = highlighted.html;
-            blkSearchMatches = Array.from(box.querySelectorAll("mark.blk-search-hit"));
-            if (blkSearchMatches.length <= 0) {
-                blkSearchIndex = -1;
-                updateBlkSearchStatus();
-                return;
-            }
-            if (blkSearchIndex < 0 || blkSearchIndex >= blkSearchMatches.length) {
-                blkSearchIndex = 0;
-            }
-            focusBlkSearchHit(blkSearchIndex);
+            blkVersionsEditorText = raw;
+            updateBlkSearchMatches();
         }
 
         function updateBlkSearchStatus() {
@@ -2251,11 +3283,11 @@ HTML_TEMPLATE = """<!doctype html>
             }
             const safeIndex = ((index % blkSearchMatches.length) + blkSearchMatches.length) % blkSearchMatches.length;
             blkSearchIndex = safeIndex;
-            blkSearchMatches.forEach((el) => el.classList.remove("blk-search-hit-active"));
             const active = blkSearchMatches[safeIndex];
-            if (active) {
-                active.classList.add("blk-search-hit-active");
-                active.scrollIntoView({ block: "center" });
+            const box = byId("blk_versions_box");
+            if (active && box) {
+                box.focus();
+                box.setSelectionRange(active.start, active.end);
             }
             updateBlkSearchStatus();
         }
@@ -2306,28 +3338,31 @@ HTML_TEMPLATE = """<!doctype html>
             return matches;
         }
 
-        function highlightMatches(raw, query) {
-            const source = String(raw || "");
-            const ranges = findBlkSearchMatches(source, query);
-            if (ranges.length <= 0) {
-                return { html: escapeHtml(source), count: 0 };
+        function updateBlkSearchMatches() {
+            const source = getBlkVersionsText();
+            if (!blkSearchQuery) {
+                blkSearchMatches = [];
+                blkSearchIndex = -1;
+                updateBlkSearchStatus();
+                return;
             }
-            const parts = [];
-            let cursor = 0;
-            for (const range of ranges) {
-                parts.push(escapeHtml(source.slice(cursor, range.start)));
-                parts.push(`<mark class="blk-search-hit">${escapeHtml(source.slice(range.start, range.end))}</mark>`);
-                cursor = range.end;
+            blkSearchMatches = findBlkSearchMatches(source, blkSearchQuery);
+            if (blkSearchMatches.length <= 0) {
+                blkSearchIndex = -1;
+                updateBlkSearchStatus();
+                return;
             }
-            parts.push(escapeHtml(source.slice(cursor)));
-            return { html: parts.join(""), count: ranges.length };
+            if (blkSearchIndex < 0 || blkSearchIndex >= blkSearchMatches.length) {
+                blkSearchIndex = 0;
+            }
+            focusBlkSearchHit(blkSearchIndex);
         }
 
         function onBlkSearchInput() {
             const input = byId("blk_search_input");
             blkSearchQuery = (input ? input.value : "");
             blkSearchIndex = -1;
-            renderBlkModal();
+            updateBlkSearchMatches();
         }
 
         function handleBlkSearchKey(event) {
@@ -2347,20 +3382,20 @@ HTML_TEMPLATE = """<!doctype html>
         function toggleBlkSearchCase() {
             blkSearchCaseSensitive = !blkSearchCaseSensitive;
             blkSearchIndex = -1;
-            renderBlkModal();
+            updateBlkSearchMatches();
         }
 
         function toggleBlkSearchWholeWord() {
             blkSearchWholeWord = !blkSearchWholeWord;
             blkSearchIndex = -1;
-            renderBlkModal();
+            updateBlkSearchMatches();
         }
 
         function applyBlkSearch() {
             const input = byId("blk_search_input");
             blkSearchQuery = (input ? input.value : "");
             blkSearchIndex = -1;
-            renderBlkModal();
+            updateBlkSearchMatches();
         }
 
         function resetBlkSearch() {
@@ -2369,7 +3404,7 @@ HTML_TEMPLATE = """<!doctype html>
             blkSearchIndex = -1;
             const input = byId("blk_search_input");
             if (input) input.value = "";
-            renderBlkModal();
+            updateBlkSearchStatus();
         }
 
         function focusPrevBlkSearchHit() {
@@ -2386,8 +3421,10 @@ HTML_TEMPLATE = """<!doctype html>
             blkParsePending = false;
             try {
                 blkVersionsData = JSON.parse(payloadJson);
+                blkVersionsEditorText = String((blkVersionsData && blkVersionsData.versions_json) || "");
             } catch (_) {
                 blkVersionsData = { error: payloadJson };
+                blkVersionsEditorText = "";
             }
             renderBlkStatus();
             renderBlkModal();
@@ -2410,8 +3447,8 @@ HTML_TEMPLATE = """<!doctype html>
         }
 
         async function copyBlkVersions() {
-            if (!blkVersionsData || !blkVersionsData.versions_json || blkVersionsData.versions_json === "null") return;
-            const text = blkVersionsData.versions_json;
+            const text = getBlkVersionsText();
+            if (!text) return;
             const dict = t(currentLang());
             try {
                 if (bridge && bridge.copyText) {
@@ -2442,10 +3479,9 @@ HTML_TEMPLATE = """<!doctype html>
                 showCopyToast(dict.blk_versions_sync_no_bridge);
                 return;
             }
-            openSyncResultModal(
-                dict.blk_sync_popup_note || "",
-                dict.blk_sync_dialog_waiting || dict.blk_sync_started_toast || dict.blk_versions_sync
-            );
+            closeSyncResultModal();
+            closeBlkSyncSuccessModal();
+            showCopyToast(dict.blk_sync_dialog_waiting || dict.blk_sync_started_toast || dict.blk_versions_sync);
             const rows = Array.from(fileRows.values() || []);
             bridge.syncBlkKeysFromRows(JSON.stringify(rows));
         }
@@ -2463,14 +3499,41 @@ HTML_TEMPLATE = """<!doctype html>
             if (preserveState) {
                 return;
             }
+            selectedInputFiles = [];
             byId("input").value = "";
+            byId("input").title = "";
             renderFileList([]);
             setOverallProgress(0, 0);
         }
 
+        function formatInputSelectionLabel(files) {
+            const list = Array.isArray(files) ? files.map((file) => String(file || "").trim()).filter(Boolean) : [];
+            if (list.length <= 0) return "";
+            if (list.length === 1) return list[0];
+            const lang = currentLang();
+            if (lang === "zh-CN") return `已选择 ${list.length} 个文件`;
+            if (lang === "zh-TW") return `已選擇 ${list.length} 個檔案`;
+            return `${list.length} files selected`;
+        }
+
+        function applyInputSelection(files, displayText) {
+            selectedInputFiles = Array.isArray(files) ? files.map((file) => String(file || "").trim()).filter(Boolean) : [];
+            const input = byId("input");
+            if (!input) return;
+            const label = String(displayText || "").trim() || formatInputSelectionLabel(selectedInputFiles);
+            input.value = label;
+            input.title = selectedInputFiles.join("\\n");
+        }
+
         function previewInput() {
             if (!bridge) return;
-            bridge.previewInput(getInputMode(), byId("input").value);
+            const mode = getInputMode();
+            if (mode === "batch") {
+                bridge.previewInput(mode, byId("input").value);
+                return;
+            }
+            const payload = selectedInputFiles.length > 0 ? selectedInputFiles : [byId("input").value];
+            bridge.previewInput(mode, JSON.stringify(payload));
         }
 
         function pickInput() {
@@ -2500,17 +3563,15 @@ HTML_TEMPLATE = """<!doctype html>
 
         function syncRules() {
             const extractOnly = byId("extract_only").checked;
-            const mux = byId("mux_mkv");
             const fast = byId("fast");
-            const report = byId("report");
             const reportRow = byId("report_path_row");
             if (extractOnly) {
-                mux.checked = false;
                 fast.checked = false;
             }
-            mux.disabled = extractOnly;
             fast.disabled = false;
-            reportRow.style.display = report.checked ? "grid" : "none";
+            reportRow.style.display = "none";
+            if (byId("report")) byId("report").checked = false;
+            if (byId("mux_mkv")) byId("mux_mkv").checked = false;
             fileRows.forEach((row, id) => updateReportAction(id, row.status || "pending"));
         }
 
@@ -2525,6 +3586,7 @@ HTML_TEMPLATE = """<!doctype html>
             const mode = theme === "light" ? "light" : "dark";
             document.documentElement.setAttribute("data-theme", mode);
             byId("theme_select").value = mode;
+            refreshCustomSelect("theme_select");
             try {
                 localStorage.setItem("usmdiviner_theme", mode);
             } catch (_) {
@@ -2539,20 +3601,23 @@ HTML_TEMPLATE = """<!doctype html>
         function runTask() {
             if (!bridge) return;
             setOverallProgress(0, 0);
+            const inputFiles = selectedInputFiles.length > 0 ? selectedInputFiles : (byId("input").value ? [byId("input").value] : []);
+            const mode = getInputMode();
             const payload = {
                 language: currentLang(),
-                input_mode: getInputMode(),
+                input_mode: mode,
                 input: byId("input").value,
+                input_files: mode === "single" ? inputFiles : [],
                 output: byId("output").value,
                 report_output: byId("report_output").value,
                 key: byId("manual_key_toggle").checked ? byId("key").value : "",
                 no_parallel: byId("no_parallel").checked,
-                report: byId("report").checked,
+                report: false,
                 fast: byId("fast").checked,
                 extract_only: byId("extract_only").checked,
                 keep_audio: byId("keep_audio").checked,
                 no_adx_mask: byId("no_adx_mask").checked,
-                mux_mkv: byId("mux_mkv").checked,
+                mux_mkv: false,
             };
             bridge.runTask(JSON.stringify(payload));
         }
@@ -2563,9 +3628,16 @@ HTML_TEMPLATE = """<!doctype html>
             }
             window.__usmBridgeBound = true;
             bridge = channel.objects.bridge;
+            setupCustomSelects();
             bridge.logMessage.connect(appendLog);
             bridge.uiToast.connect(showCopyToast);
             bridge.syncResultReady.connect(onSyncResultReady);
+            bridge.blkSavePromptReady.connect(onBlkSavePromptReady);
+            bridge.blkSaveCompleted.connect(onBlkSaveCompleted);
+            bridge.indexExportResultReady.connect(onIndexExportResult);
+            bridge.videoExportReady.connect(onVideoExportReady);
+            bridge.videoExportProgress.connect(onVideoExportProgress);
+            bridge.videoExportFinished.connect(onVideoExportFinished);
             bridge.runStateChanged.connect(setRunning);
             bridge.fieldChosen.connect(setField);
             bridge.fileListReady.connect(loadFileList);
@@ -2583,6 +3655,115 @@ HTML_TEMPLATE = """<!doctype html>
             bridge.setLanguage(lang);
             applyLanguage(lang);
         });
+
+        document.addEventListener("click", (event) => {
+            const target = event.target;
+            if (target instanceof Element && target.closest(".select-shell")) {
+                return;
+            }
+            closeCustomSelects();
+        });
+
+
+        document.addEventListener("keydown", (event) => {
+            if (event.key === "Escape") {
+                closeCustomSelects();
+                hideContextMenu();
+            }
+        });
+
+        let contextMenu = null;
+        let contextMenuCopy = null;
+        let contextMenuTarget = null;
+
+        function resolveContextCopyText(target) {
+            const selected = (window.getSelection && window.getSelection().toString()) || "";
+            if ((selected || "").trim()) return selected.trim();
+            if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
+                const val = String(target.value || "").trim();
+                return val;
+            }
+            if (!(target instanceof Element)) return "";
+            const textHost = target.closest("td, th, .mini-label, .progress-text, .select-trigger-label, .log-box, .blk-preview, .sync-result-text, .save-success-path, .sub, label, button");
+            const text = textHost ? String(textHost.textContent || "").trim() : "";
+            return text;
+        }
+
+        function copyTextToClipboard(text) {
+            const value = String(text || "").trim();
+            if (!value) return;
+            if (bridge && bridge.copyText) {
+                bridge.copyText(value);
+                return;
+            }
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(value).catch(() => {});
+            }
+        }
+
+        function refreshContextMenuLanguage() {
+            if (!contextMenuCopy) return;
+            const dict = t(currentLang());
+            contextMenuCopy.textContent = dict.context_menu_copy || dict.blk_versions_copy || "Copy";
+        }
+
+        function initContextMenu() {
+            contextMenu = document.createElement("div");
+            contextMenu.className = "context-menu";
+            contextMenu.innerHTML = `
+                <div class="context-menu-item" id="context-menu-copy"></div>
+            `;
+            document.body.appendChild(contextMenu);
+            contextMenuCopy = contextMenu.querySelector("#context-menu-copy");
+            refreshContextMenuLanguage();
+            
+            contextMenuCopy.addEventListener("click", () => {
+                if (contextMenuCopy.classList.contains("disabled")) return;
+                copyTextToClipboard(resolveContextCopyText(contextMenuTarget));
+                hideContextMenu();
+            });
+        }
+
+        function hideContextMenu() {
+            if (contextMenu) {
+                contextMenu.classList.remove("show");
+            }
+        }
+
+        function showContextMenu(event) {
+            const target = event.target;
+            if (!contextMenu) initContextMenu();
+            contextMenuTarget = target;
+            const copyText = resolveContextCopyText(target);
+            contextMenuCopy.classList.toggle("disabled", !copyText);
+
+            const menuWidth = contextMenu.offsetWidth || 140;
+            const menuHeight = contextMenu.offsetHeight || 34;
+            const maxLeft = Math.max(8, window.innerWidth - menuWidth - 8);
+            const maxTop = Math.max(8, window.innerHeight - menuHeight - 8);
+            const left = Math.max(8, Math.min(event.clientX, maxLeft));
+            const top = Math.max(8, Math.min(event.clientY, maxTop));
+            
+            contextMenu.classList.add("show");
+            contextMenu.style.left = left + "px";
+            contextMenu.style.top = top + "px";
+        }
+
+        document.addEventListener("contextmenu", (event) => {
+            event.preventDefault();
+            showContextMenu(event);
+            return false;
+        });
+
+        document.addEventListener("click", (event) => {
+            if (contextMenu && !contextMenu.contains(event.target)) {
+                hideContextMenu();
+            }
+        });
+
+        document.addEventListener("scroll", () => {
+            hideContextMenu();
+        }, true);
     </script>
 </body>
 </html>
@@ -2615,6 +3796,12 @@ class WebBridge(QObject):
     logMessage = Signal(str)
     uiToast = Signal(str)
     syncResultReady = Signal(str)
+    blkSavePromptReady = Signal(str)
+    blkSaveCompleted = Signal(str)
+    indexExportResultReady = Signal(str)
+    videoExportReady = Signal(str)
+    videoExportProgress = Signal(str)
+    videoExportFinished = Signal(str)
     runStateChanged = Signal(bool)
     windowTitleChanged = Signal(str)
     fieldChosen = Signal(str, str)
@@ -2628,6 +3815,7 @@ class WebBridge(QObject):
         super().__init__()
         self._worker: threading.Thread | None = None
         self._blk_worker: threading.Thread | None = None
+        self._video_export_worker: threading.Thread | None = None
         self._blk_result_lock = threading.Lock()
         self._last_blk_result: dict | None = None
         self._language = DEFAULT_LANGUAGE
@@ -2656,24 +3844,50 @@ class WebBridge(QObject):
     def copyText(self, text: str) -> None:
         QApplication.clipboard().setText(str(text or ""))
 
+    @staticmethod
+    def _parse_input_file_selection(raw_input: str) -> list[str]:
+        text = str(raw_input or "").strip()
+        if not text:
+            return []
+        try:
+            decoded = json.loads(text)
+        except Exception:
+            decoded = None
+
+        files: Any = None
+        if isinstance(decoded, dict):
+            files = decoded.get("files")
+        elif isinstance(decoded, list):
+            files = decoded
+        if isinstance(files, list):
+            return [str(item).strip() for item in files if str(item).strip()]
+
+        if "\n" in text:
+            return [line.strip() for line in text.splitlines() if line.strip()]
+
+        return [text]
+
     @Slot(str)
     def pickInput(self, mode: str) -> None:
         if mode == "batch":
             picked_dir = QFileDialog.getExistingDirectory(None, self._t("select_usm_folder"))
             if picked_dir:
                 self.fieldChosen.emit("input", picked_dir)
-                self._emit_preview_list(mode, picked_dir)
             return
 
-        picked_file, _ = QFileDialog.getOpenFileName(
+        picked_files, _ = QFileDialog.getOpenFileNames(
             None,
-            self._t("select_usm_file"),
+            self._t("select_usm_files"),
             "",
             "USM (*.usm);;All files (*.*)",
         )
-        if picked_file:
-            self.fieldChosen.emit("input", picked_file)
-            self._emit_preview_list(mode, picked_file)
+        if picked_files:
+            files = [str(Path(p)) for p in picked_files if str(p).strip()]
+            if files:
+                self.fieldChosen.emit(
+                    "input",
+                    json.dumps({"files": files, "display": files[0] if len(files) == 1 else ""}, ensure_ascii=False),
+                )
 
     @Slot()
     def pickBlkFile(self) -> None:
@@ -2819,6 +4033,306 @@ class WebBridge(QObject):
             return self._t("blk_sync_popup_empty")
         return "\n".join(lines)
 
+    @staticmethod
+    def _load_versions_list_from_payload(payload: Any) -> list[dict[str, Any]] | None:
+        if isinstance(payload, dict):
+            versions_list = payload.get("list")
+        elif isinstance(payload, list):
+            versions_list = payload
+        else:
+            versions_list = None
+        return versions_list if isinstance(versions_list, list) else None
+
+    def _load_versions_template_payload(self) -> tuple[Any | None, str | None]:
+        for template_path in SYNC_TEMPLATE_CANDIDATES:
+            if not template_path.exists() or not template_path.is_file():
+                continue
+            try:
+                payload = json.loads(template_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if self._load_versions_list_from_payload(payload) is None:
+                continue
+            return payload, str(template_path)
+        return None, None
+
+    def _collect_versions_key_state(self, payload: Any) -> dict[str, Any]:
+        versions_list = self._load_versions_list_from_payload(payload) or []
+        nodes: dict[tuple[str, str, str], dict[str, Any]] = {}
+        missing_group_versions = 0
+        keyed_game_versions: set[str] = set()
+        ordered_versions: list[str] = []
+
+        for item in versions_list:
+            if not isinstance(item, dict):
+                continue
+            game_version = str(item.get("version") or "").strip() or "—"
+            ordered_versions.append(game_version)
+            groups = item.get("videoGroups")
+            if isinstance(groups, list):
+                for index, group in enumerate(groups):
+                    if not isinstance(group, dict):
+                        continue
+                    owner_version_raw = str(group.get("version") or "").strip()
+                    owner_version = owner_version_raw or f"#{index}"
+                    has_key = self._parse_sync_key(group.get("key")) is not None
+                    if has_key:
+                        keyed_game_versions.add(game_version)
+                    elif owner_version_raw:
+                        missing_group_versions += 1
+                    nodes[("group", game_version, owner_version)] = {
+                        "kind": "group",
+                        "game_version": game_version,
+                        "owner_version": owner_version,
+                        "has_key": has_key,
+                    }
+                continue
+
+            has_key = self._parse_sync_key(item.get("key")) is not None
+            if has_key:
+                keyed_game_versions.add(game_version)
+            nodes[("item", game_version, "")] = {
+                "kind": "item",
+                "game_version": game_version,
+                "owner_version": game_version,
+                "has_key": has_key,
+            }
+
+        missing_nodes = [node for node in nodes.values() if not node["has_key"]]
+        return {
+            "nodes": nodes,
+            "missing_nodes": missing_nodes,
+            "missing_versions": {node["game_version"] for node in missing_nodes},
+            "missing_group_versions": missing_group_versions,
+            "keyed_game_versions": keyed_game_versions,
+            "latest_game_version": ordered_versions[-1] if ordered_versions else "",
+        }
+
+    @staticmethod
+    def _default_versions_save_path(source_path: str) -> str:
+        source = Path(str(source_path or "").strip())
+        if source.is_file():
+            return str(source.with_name("versions.json"))
+        if source.exists() and source.is_dir():
+            return str(source / "versions.json")
+        return str(Path.cwd() / "versions.json")
+
+    @staticmethod
+    def _linux_has_desktop_environment() -> bool:
+        return bool(
+            os.environ.get("DISPLAY")
+            or os.environ.get("WAYLAND_DISPLAY")
+            or os.environ.get("XDG_CURRENT_DESKTOP")
+            or os.environ.get("DESKTOP_SESSION")
+        )
+
+    def _can_reveal_saved_path(self) -> bool:
+        if sys.platform.startswith("linux"):
+            return self._linux_has_desktop_environment()
+        return True
+
+    def _analyze_blk_save_state(self, content: str) -> tuple[dict[str, Any] | None, str | None]:
+        try:
+            decoded = json.loads(str(content or ""))
+        except json.JSONDecodeError as exc:
+            return None, self._t("blk_versions_save_invalid_json", reason=exc)
+
+        if not isinstance(decoded, dict):
+            return None, self._t("blk_versions_save_invalid_root")
+
+        current_state = self._collect_versions_key_state(decoded)
+        missing_nodes = current_state["missing_nodes"]
+        latest_game_version = str(current_state["latest_game_version"] or "")
+        missing_versions = set(current_state["missing_versions"])
+        missing_group_versions = int(current_state["missing_group_versions"] or 0)
+        early_versions = {"common", "2.0", "2.1", "2.2", "2.3", "2.4", "2.5", "2.6"}
+        keyed_versions = set(current_state["keyed_game_versions"])
+        has_later_missing = any(v not in early_versions for v in missing_versions)
+        legacy_only_pattern = bool(keyed_versions) and keyed_versions.issubset(early_versions) and has_later_missing
+
+        template_payload, _ = self._load_versions_template_payload()
+        same_as_template = False
+        if template_payload is not None:
+            template_state = self._collect_versions_key_state(template_payload)
+            current_missing_ids = {node_id for node_id, node in current_state["nodes"].items() if not node["has_key"]}
+            template_missing_ids = {node_id for node_id, node in template_state["nodes"].items() if not node["has_key"]}
+            same_as_template = current_missing_ids == template_missing_ids
+
+        if not missing_nodes:
+            return {
+                "requires_confirmation": False,
+                "severity": "direct",
+                "missing_count": 0,
+                "missing_group_versions": 0,
+                "latest_game_version": latest_game_version,
+                "same_as_template": same_as_template,
+            }, None
+
+        only_latest_missing = bool(missing_nodes) and missing_versions == {latest_game_version}
+        if legacy_only_pattern or missing_group_versions >= 4 or not only_latest_missing:
+            return {
+                "requires_confirmation": True,
+                "severity": "severe",
+                "missing_count": len(missing_nodes),
+                "missing_group_versions": missing_group_versions,
+                "latest_game_version": latest_game_version,
+                "same_as_template": same_as_template,
+            }, None
+
+        return {
+            "requires_confirmation": True,
+            "severity": "latest-only",
+            "missing_count": len(missing_nodes),
+            "missing_group_versions": missing_group_versions,
+            "latest_game_version": latest_game_version,
+            "same_as_template": same_as_template,
+        }, None
+
+    def _build_blk_save_prompt_payload(self, analysis: dict[str, Any]) -> dict[str, str]:
+        severity = str(analysis.get("severity") or "")
+        latest_game_version = str(analysis.get("latest_game_version") or "—")
+        missing_count = int(analysis.get("missing_count") or 0)
+        missing_group_versions = int(analysis.get("missing_group_versions") or 0)
+        if severity == "severe":
+            message = self._t(
+                "blk_versions_save_confirm_severe",
+                missing=missing_count,
+                group_missing=missing_group_versions,
+                latest=latest_game_version,
+            )
+        else:
+            message = self._t(
+                "blk_versions_save_confirm_latest_only",
+                missing=missing_count,
+                latest=latest_game_version,
+            )
+        return {
+            "title": self._t("blk_versions_save_confirm_title"),
+            "message": message,
+        }
+
+    def _save_blk_versions_to_path(self, content: str) -> str | None:
+        with self._blk_result_lock:
+            result = dict(self._last_blk_result or {})
+        default_path = self._default_versions_save_path(str(result.get("input") or ""))
+        target_path, _ = QFileDialog.getSaveFileName(
+            None,
+            self._t("select_versions_save_file"),
+            default_path,
+            "JSON (*.json);;All files (*.*)",
+        )
+        if not target_path:
+            return None
+        try:
+            Path(target_path).write_text(str(content or ""), encoding="utf-8")
+        except OSError as exc:
+            self.logMessage.emit(self._t("error_line", file="versions.json", reason=exc))
+            self.uiToast.emit(self._t("blk_versions_save_failed", reason=exc))
+            return None
+        return target_path
+
+    @Slot(str)
+    def requestSaveBlkVersions(self, content: str) -> None:
+        analysis, error = self._analyze_blk_save_state(content)
+        if error:
+            self.uiToast.emit(error)
+            self.logMessage.emit(error)
+            return
+        if not analysis:
+            self.uiToast.emit(self._t("blk_versions_save_failed_unknown"))
+            return
+        if analysis.get("requires_confirmation"):
+            self.blkSavePromptReady.emit(
+                json.dumps(self._build_blk_save_prompt_payload(analysis), ensure_ascii=False)
+            )
+            return
+
+        saved_path = self._save_blk_versions_to_path(content)
+        if not saved_path:
+            return
+        self.blkSaveCompleted.emit(
+            json.dumps(
+                {
+                    "message": self._t("blk_versions_saved_message"),
+                    "path": saved_path,
+                    "can_reveal": self._can_reveal_saved_path(),
+                },
+                ensure_ascii=False,
+            )
+        )
+        self.logMessage.emit(self._t("blk_versions_saved_log", path=saved_path))
+
+    @Slot(str)
+    def confirmSaveBlkVersions(self, content: str) -> None:
+        analysis, error = self._analyze_blk_save_state(content)
+        if error:
+            self.uiToast.emit(error)
+            self.logMessage.emit(error)
+            return
+        if not analysis:
+            self.uiToast.emit(self._t("blk_versions_save_failed_unknown"))
+            return
+
+        saved_path = self._save_blk_versions_to_path(content)
+        if not saved_path:
+            return
+        self.blkSaveCompleted.emit(
+            json.dumps(
+                {
+                    "message": self._t("blk_versions_saved_message"),
+                    "path": saved_path,
+                    "can_reveal": self._can_reveal_saved_path(),
+                },
+                ensure_ascii=False,
+            )
+        )
+        self.logMessage.emit(self._t("blk_versions_saved_log", path=saved_path))
+
+    @Slot(str)
+    def revealSavedPath(self, target_path: str) -> None:
+        path = Path(str(target_path or "").strip())
+        if not path.exists():
+            self.uiToast.emit(self._t("blk_versions_reveal_failed"))
+            return
+        try:
+            if sys.platform.startswith("win"):
+                subprocess.Popen(["explorer", f"/select,{path}"])
+                return
+            if sys.platform == "darwin":
+                subprocess.Popen(["open", "-R", str(path)])
+                return
+            if not self._linux_has_desktop_environment():
+                return
+
+            uri = path.resolve().as_uri()
+            parent = path.resolve().parent
+            for command in (
+                ["nautilus", "--select", str(path)],
+                ["dolphin", "--select", str(path)],
+                ["nemo", str(path)],
+                [
+                    "dbus-send",
+                    "--session",
+                    "--dest=org.freedesktop.FileManager1",
+                    "--type=method_call",
+                    "/org/freedesktop/FileManager1",
+                    "org.freedesktop.FileManager1.ShowItems",
+                    f"array:string:{uri}",
+                    "string:",
+                ],
+                ["xdg-open", str(parent)],
+            ):
+                if command[0] != "dbus-send" and shutil.which(command[0]) is None:
+                    continue
+                try:
+                    subprocess.Popen(command)
+                    return
+                except OSError:
+                    continue
+            self.uiToast.emit(self._t("blk_versions_reveal_failed"))
+        except OSError:
+            self.uiToast.emit(self._t("blk_versions_reveal_failed"))
+
     def _build_template_key_map(self) -> tuple[dict[str, int], str | None]:
         def add_videos(mapping: dict[str, int], videos: Any, key_val: int | None) -> None:
             if key_val is None or not isinstance(videos, list):
@@ -2892,7 +4406,9 @@ class WebBridge(QObject):
         for row in rows if isinstance(rows, list) else []:
             if not isinstance(row, dict):
                 continue
-            key_val = self._parse_sync_key(row.get("genshin_like_key"))
+            key_val = self._parse_sync_key(row.get("usm_decrypt_key"))
+            if key_val is None:
+                key_val = self._parse_sync_key(row.get("genshin_like_key"))
             if key_val is None:
                 continue
             row_name = str(row.get("name") or "").strip()
@@ -3057,7 +4573,20 @@ class WebBridge(QObject):
                 skipped=skipped_groups,
             )
         )
-        self.syncResultReady.emit(self._build_sync_popup_text(unresolved_details))
+        self.syncResultReady.emit(
+            json.dumps(
+                {
+                    "unresolved_count": unresolved_groups,
+                    "details_text": self._build_sync_popup_text(unresolved_details),
+                    "success_message": self._t(
+                        "blk_sync_all_resolved_message",
+                        updated=updated_groups,
+                        skipped=skipped_groups,
+                    ),
+                },
+                ensure_ascii=False,
+            )
+        )
         if unresolved_details:
             self.logMessage.emit(self._t("blk_sync_unresolved_header", count=len(unresolved_details)))
             for detail in unresolved_details:
@@ -3078,19 +4607,21 @@ class WebBridge(QObject):
             self.overallProgressUpdate.emit(json.dumps({"done": 0, "total": 0}, ensure_ascii=False))
             return
 
-        input_path = Path(input_text)
         files: list[Path] = []
         normalized_mode = str(mode or "single").strip().lower()
         if normalized_mode == "batch":
+            input_path = Path(input_text)
             if input_path.exists() and input_path.is_dir():
                 files = collect_usm_inputs(input_path)
         else:
-            if (
-                input_path.exists()
-                and input_path.is_file()
-                and input_path.suffix.lower() == ".usm"
-            ):
-                files = [input_path]
+            for item in self._parse_input_file_selection(input_text):
+                input_path = Path(item)
+                if (
+                    input_path.exists()
+                    and input_path.is_file()
+                    and input_path.suffix.lower() == ".usm"
+                ):
+                    files.append(input_path)
 
         rows, _ = self._build_file_rows(files)
         self.fileListReady.emit(json.dumps(rows, ensure_ascii=False))
@@ -3165,6 +4696,351 @@ class WebBridge(QObject):
 
         self.logMessage.emit(self._t("log_exported", path=target_path))
 
+    @staticmethod
+    def _build_index_item(report: dict[str, Any]) -> dict[str, Any]:
+        item: dict[str, Any] = {
+            "file": report.get("file"),
+            "status": report.get("status"),
+            "reason": report.get("reason"),
+            "extract_only": bool(report.get("extract_only")),
+            "key1_hex_little": report.get("key1_hex_little"),
+            "key2_hex_little": report.get("key2_hex_little"),
+            "usm_decrypt_key": report.get("usm_decrypt_key")
+            if report.get("usm_decrypt_key") is not None
+            else report.get("genshin_like_key"),
+            "full_key_hex": report.get("full_key_hex"),
+            "report_path": report.get("report_path"),
+            "report_written": bool(report.get("report_written")),
+        }
+        video = report.get("video") or {}
+        mux = report.get("mux") or {}
+        if isinstance(video, dict):
+            item["video"] = {
+                "path": video.get("path"),
+                "format": video.get("format"),
+            }
+        if isinstance(mux, dict):
+            item["mux"] = {
+                "ok": bool(mux.get("ok")),
+                "mp4": mux.get("mp4"),
+                "mkv": mux.get("mkv"),
+            }
+        return item
+
+    @Slot()
+    def exportIndexJson(self) -> None:
+        with self._reports_lock:
+            reports = [dict(v) for v in self._reports_by_id.values()]
+
+        if not reports:
+            msg = self._t("index_no_data")
+            self.logMessage.emit(msg)
+            self.indexExportResultReady.emit(
+                json.dumps(
+                    {
+                        "title": self._t("index_export_failed_title"),
+                        "message": msg,
+                        "path": "",
+                        "can_reveal": False,
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            return
+
+        reports.sort(key=lambda x: str(x.get("file") or ""))
+        payload = {
+            "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "total": len(reports),
+            "ok": sum(1 for r in reports if r.get("status") == "ok"),
+            "skipped": sum(1 for r in reports if r.get("status") == "skipped"),
+            "error": sum(1 for r in reports if r.get("status") == "error"),
+            "items": [self._build_index_item(r) for r in reports],
+        }
+
+        default_path = str(Path.cwd() / "usm_processed_index.json")
+        target_path, _ = QFileDialog.getSaveFileName(
+            None,
+            self._t("select_index_save_file"),
+            default_path,
+            "JSON (*.json);;All files (*.*)",
+        )
+        if not target_path:
+            return
+
+        try:
+            Path(target_path).write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            msg = self._t("index_export_failed", reason=exc)
+            self.logMessage.emit(msg)
+            self.indexExportResultReady.emit(
+                json.dumps(
+                    {
+                        "title": self._t("index_export_failed_title"),
+                        "message": msg,
+                        "path": "",
+                        "can_reveal": False,
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            return
+
+        msg = self._t("index_exported", path=target_path)
+        self.logMessage.emit(msg)
+        self.indexExportResultReady.emit(
+            json.dumps(
+                {
+                    "title": self._t("index_export_success_title"),
+                    "message": msg,
+                    "path": target_path,
+                    "can_reveal": self._can_reveal_saved_path(),
+                },
+                ensure_ascii=False,
+            )
+        )
+
+    @Slot()
+    def exportAllReports(self) -> None:
+        with self._reports_lock:
+            reports = [dict(v) for v in self._reports_by_id.values()]
+
+        if not reports:
+            msg = self._t("report_not_ready")
+            self.indexExportResultReady.emit(
+                json.dumps(
+                    {
+                        "title": self._t("export_all_reports_title"),
+                        "message": msg,
+                        "path": "",
+                        "can_reveal": False,
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            return
+
+        first_file = Path(str(reports[0].get("file") or Path.cwd()))
+        folder_by_lang = {
+            "zh-cn": "USM_解密报告",
+            "zh-tw": "USM_解密報告",
+            "en": "USM_Decryption_Reports",
+        }
+        folder_name = folder_by_lang.get(self._get_language().lower(), folder_by_lang["en"])
+        default_root = first_file.parent / folder_name
+        target_dir = QFileDialog.getExistingDirectory(
+            None,
+            self._t("select_report_export_folder"),
+            str(default_root),
+        )
+        if not target_dir:
+            return
+
+        target_root = Path(target_dir)
+        target_root.mkdir(parents=True, exist_ok=True)
+        ok_count = 0
+        fail_count = 0
+        for report in reports:
+            src = Path(str(report.get("file") or "report"))
+            base = f"{src.stem}_Report.json" if src.stem else "USM_Report.json"
+            out = target_root / base
+            if out.exists():
+                idx = 2
+                while True:
+                    cand = target_root / f"{src.stem}_Report_{idx}.json"
+                    if not cand.exists():
+                        out = cand
+                        break
+                    idx += 1
+            try:
+                out.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+                ok_count += 1
+            except OSError:
+                fail_count += 1
+
+        message = self._t("export_all_reports_done", ok=ok_count, failed=fail_count)
+        self.logMessage.emit(message)
+        self.indexExportResultReady.emit(
+            json.dumps(
+                {
+                    "title": self._t("export_all_reports_title"),
+                    "message": message,
+                    "path": str(target_root),
+                    "can_reveal": self._can_reveal_saved_path(),
+                },
+                ensure_ascii=False,
+            )
+        )
+
+    @Slot()
+    def pickVideoExportOutput(self) -> None:
+        picked_dir = QFileDialog.getExistingDirectory(None, self._t("select_video_export_folder"))
+        if picked_dir:
+            self.fieldChosen.emit("video_export_output", picked_dir)
+
+    @Slot(str)
+    def startVideoExport(self, payload_json: str) -> None:
+        if self._video_export_worker and self._video_export_worker.is_alive():
+            return
+        try:
+            payload = json.loads(payload_json or "{}")
+        except json.JSONDecodeError:
+            payload = {}
+
+        fmt = str(payload.get("format") or "mp4").lower()
+        output_text = str(payload.get("output_dir") or "").strip()
+        if not output_text:
+            self.videoExportFinished.emit(
+                json.dumps(
+                    {
+                        "title": self._t("video_export_result_title"),
+                        "message": self._t("video_export_output_required"),
+                        "path": "",
+                        "can_reveal": False,
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            return
+        output_dir = Path(output_text)
+
+        candidates = payload.get("candidates") if isinstance(payload.get("candidates"), list) else []
+        ffmpeg = find_ffmpeg(None)
+        if not ffmpeg:
+            self.videoExportFinished.emit(
+                json.dumps(
+                    {
+                        "title": self._t("video_export_result_title"),
+                        "message": self._t("video_export_ffmpeg_missing"),
+                        "path": "",
+                        "can_reveal": False,
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            return
+
+        self._video_export_worker = threading.Thread(
+            target=self._run_video_export,
+            args=(fmt, output_dir, candidates, ffmpeg),
+            daemon=True,
+        )
+        self._video_export_worker.start()
+
+    def _run_video_export(self, fmt: str, output_dir: Path, candidates: list[Any], ffmpeg: str) -> None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        total = max(1, len(candidates))
+        done = 0
+        success = 0
+        failed = 0
+
+        for item in candidates:
+            row_id = str((item or {}).get("id") or "")
+            name = str((item or {}).get("name") or row_id or "video")
+            ivf = Path(str((item or {}).get("ivf") or ""))
+            wavs = [Path(str(p)) for p in ((item or {}).get("wavs") or []) if str(p or "").strip()]
+            self.videoExportProgress.emit(
+                json.dumps(
+                    {
+                        "id": row_id,
+                        "progress": 10,
+                        "status": self._t("video_export_status_running"),
+                        "done": done,
+                        "total": total,
+                    },
+                    ensure_ascii=False,
+                )
+            )
+
+            ok = False
+            if ivf.exists() and ivf.is_file():
+                stem = Path(name).stem if name else ivf.stem
+                if fmt == "mkv":
+                    out = output_dir / f"{stem}.mkv"
+                    ok, _ = mux_to_mkv(ffmpeg, ivf, wavs, out)
+                else:
+                    out = output_dir / f"{stem}.mp4"
+                    ok, _ = transcode_ivf_to_mp4(ffmpeg, ivf, wavs, out)
+
+            done += 1
+            if ok:
+                success += 1
+            else:
+                failed += 1
+            self.videoExportProgress.emit(
+                json.dumps(
+                    {
+                        "id": row_id,
+                        "progress": 100,
+                        "status": self._t("video_export_status_done") if ok else self._t("video_export_status_failed"),
+                        "done": done,
+                        "total": total,
+                    },
+                    ensure_ascii=False,
+                )
+            )
+
+        self.videoExportFinished.emit(
+            json.dumps(
+                {
+                    "title": self._t("video_export_result_title"),
+                    "message": self._t("video_export_done", ok=success, failed=failed),
+                    "path": str(output_dir),
+                    "can_reveal": self._can_reveal_saved_path(),
+                },
+                ensure_ascii=False,
+            )
+        )
+
+    def _collect_video_export_candidates(self, reports: list[dict]) -> tuple[list[dict[str, Any]], str]:
+        if not reports:
+            return [], ""
+        if any(str(r.get("status") or "") != "ok" for r in reports):
+            return [], ""
+        ok_reports = reports
+
+        candidates: list[dict[str, Any]] = []
+        all_have_ivf = True
+        default_parent = ""
+        for report in ok_reports:
+            video = report.get("video") or {}
+            ivf_text = str(video.get("path") or "").strip()
+            ivf = Path(ivf_text) if ivf_text else None
+            if not ivf or not ivf.exists() or ivf.suffix.lower() != ".ivf":
+                all_have_ivf = False
+                continue
+            if not default_parent:
+                default_parent = str(ivf.parent)
+
+            wavs: list[str] = []
+            audio = report.get("audio") or {}
+            if isinstance(audio, dict):
+                for item in audio.values():
+                    info = item if isinstance(item, dict) else {}
+                    decode = info.get("decode") if isinstance(info.get("decode"), dict) else {}
+                    wav_text = str(decode.get("wav") or "").strip()
+                    if wav_text and Path(wav_text).exists():
+                        wavs.append(wav_text)
+
+            file_name = Path(str(report.get("file") or ivf.name)).name
+            row_id = str(report.get("id") or "")
+            candidates.append(
+                {
+                    "id": row_id,
+                    "name": file_name,
+                    "file": str(report.get("file") or ""),
+                    "ivf": str(ivf),
+                    "wavs": wavs,
+                }
+            )
+
+        if not all_have_ivf or len(candidates) != len(ok_reports):
+            return [], ""
+        return candidates, default_parent
+
     @Slot(str)
     def runTask(self, payload_json: str) -> None:
         if self._worker and self._worker.is_alive():
@@ -3186,6 +5062,7 @@ class WebBridge(QObject):
     def _collect_config(self, payload: dict) -> dict:
         input_mode = str(payload.get("input_mode") or "single").strip().lower()
         input_text = str(payload.get("input") or "").strip()
+        input_files_payload = payload.get("input_files") if isinstance(payload.get("input_files"), list) else []
         output_text = str(payload.get("output") or "output").strip() or "output"
         report_output_text = str(payload.get("report_output") or "").strip()
         key_text = str(payload.get("key") or "").strip()
@@ -3201,17 +5078,45 @@ class WebBridge(QObject):
         if not input_text:
             raise ValueError(self._t("input_required"))
 
-        input_path = Path(input_text)
-        if not input_path.exists():
-            raise ValueError(self._t("input_not_found", path=input_path))
+        input_path = Path(input_text) if input_text else Path.cwd()
+        input_root: str | None = None
+
         if input_mode == "batch":
+            if not input_path.exists():
+                raise ValueError(self._t("input_not_found", path=input_path))
             if not input_path.is_dir():
                 raise ValueError(self._t("batch_requires_folder"))
+            input_files: list[Path] = []
+            input_root = str(input_path)
         else:
-            if not input_path.is_file():
-                raise ValueError(self._t("single_requires_file"))
-            if input_path.suffix.lower() != ".usm":
-                raise ValueError(self._t("single_requires_usm"))
+            if input_files_payload:
+                input_files = []
+                for item in input_files_payload:
+                    path = Path(str(item or "").strip())
+                    if not path.exists():
+                        raise ValueError(self._t("input_not_found", path=path))
+                    if not path.is_file():
+                        raise ValueError(self._t("single_requires_file"))
+                    if path.suffix.lower() != ".usm":
+                        raise ValueError(self._t("single_requires_usm"))
+                    input_files.append(path)
+                if input_files:
+                    try:
+                        parents = {str(path.resolve().parent) for path in input_files}
+                    except OSError:
+                        parents = set()
+                    if len(parents) == 1:
+                        input_root = next(iter(parents))
+                    input_path = input_files[0]
+            else:
+                if not input_path.exists():
+                    raise ValueError(self._t("input_not_found", path=input_path))
+                if not input_path.is_file():
+                    raise ValueError(self._t("single_requires_file"))
+                if input_path.suffix.lower() != ".usm":
+                    raise ValueError(self._t("single_requires_usm"))
+                input_files = [input_path]
+                input_root = str(input_path.parent)
 
         report_dir = None
         if report_output_text:
@@ -3238,7 +5143,7 @@ class WebBridge(QObject):
 
         opt = ProcessOptions(
             output_dir=output_text,
-            input_root=str(input_path) if input_path.is_dir() else None,
+            input_root=input_root,
             vgmstream=None,
             keep_intermediate_audio=keep_audio,
             adx_audio_mask=not no_adx_mask,
@@ -3254,7 +5159,8 @@ class WebBridge(QObject):
         )
 
         return {
-            "input_path": input_path,
+            "input_path": input_path if input_mode == "batch" else input_files[0],
+            "input_files": input_files if input_mode == "single" else None,
             "opt": opt,
             "no_parallel": no_parallel,
         }
@@ -3325,14 +5231,35 @@ class WebBridge(QObject):
 
         try:
             input_path: Path = config["input_path"]
+            input_files: list[Path] | None = config.get("input_files")
             opt: ProcessOptions = config["opt"]
             no_parallel: bool = config["no_parallel"]
             with self._reports_lock:
                 self._reports_by_id.clear()
+            self.videoExportReady.emit(
+                json.dumps(
+                    {
+                        "candidates": [],
+                        "default_output_dir": "",
+                    },
+                    ensure_ascii=False,
+                )
+            )
 
-            files = collect_usm_inputs(input_path)
+            files = input_files if input_files else collect_usm_inputs(input_path)
+            if not files and input_path.exists() and input_path.is_file() and input_path.suffix.lower() == ".usm":
+                files = [input_path]
             if not files:
                 self.logMessage.emit(self._t("no_usm_files_found"))
+                self.videoExportReady.emit(
+                    json.dumps(
+                        {
+                            "candidates": [],
+                            "default_output_dir": "",
+                        },
+                        ensure_ascii=False,
+                    )
+                )
                 return
 
             rows, path_to_id = self._build_file_rows(files)
@@ -3364,7 +5291,7 @@ class WebBridge(QObject):
             if opt.mux_mkv:
                 self.logMessage.emit(
                     "[INFO] ffmpeg: "
-                    + (find_ffmpeg(opt.ffmpeg) or "not found; MKV mux will be skipped")
+                    + (find_ffmpeg(opt.ffmpeg) or "not found; MP4/MKV output will be skipped")
                 )
 
             reports: list[dict] = []
@@ -3421,7 +5348,7 @@ class WebBridge(QObject):
                             str(path),
                             opt,
                             progress_callback=(
-                                lambda value, _row_id=row_id, _file_name=path.name: (
+                                lambda value, _row_id=row_id, _file_name=path.name, _done=done_count: (
                                     self.fileProgressUpdate.emit(
                                         json.dumps(
                                             {"id": _row_id, "progress": int(value)},
@@ -3433,6 +5360,15 @@ class WebBridge(QObject):
                                         int(value),
                                         stage_plan,
                                         announced_stage_logs,
+                                    ),
+                                    self.overallProgressUpdate.emit(
+                                        json.dumps(
+                                            {
+                                                "done": _done + (max(0, min(100, int(value))) / 100),
+                                                "total": len(files),
+                                            },
+                                            ensure_ascii=False,
+                                        )
                                     ),
                                 )
                             )
@@ -3473,6 +5409,16 @@ class WebBridge(QObject):
             self.logMessage.emit(
                 self._t("done_summary", ok=ok, skipped=skipped, errors=errors)
             )
+            candidates, default_output_dir = self._collect_video_export_candidates(reports)
+            self.videoExportReady.emit(
+                json.dumps(
+                    {
+                        "candidates": candidates,
+                        "default_output_dir": default_output_dir,
+                    },
+                    ensure_ascii=False,
+                )
+            )
         finally:
             root_logger.removeHandler(handler)
             root_logger.setLevel(old_level)
@@ -3485,8 +5431,10 @@ def _summary_line(lang: str, report: dict) -> str:
     status = report.get("status")
     if status == "ok":
         mux = report.get("mux") or {}
-        if mux.get("ok") and mux.get("mkv"):
-            return _t(lang, "ok_mux_line", file=file_name, mkv=mux["mkv"])
+        if mux.get("ok"):
+            primary = mux.get("mp4") or mux.get("mkv")
+            if primary:
+                return _t(lang, "ok_mux_line", file=file_name, mkv=primary)
         return _t(lang, "ok_line", file=file_name)
     reason = report.get("reason") or "unknown"
     if status == "skipped":
@@ -3565,7 +5513,16 @@ def _report_detail_lines(report: dict) -> list[str]:
     mux = report.get("mux")
     if mux:
         if mux.get("ok"):
-            lines.append("     mkv: {mkv}".format(mkv=mux.get("mkv")))
+            if mux.get("mp4"):
+                lines.append("     mp4: {mp4} (primary)".format(mp4=mux.get("mp4")))
+            if mux.get("mkv"):
+                lines.append("     mkv: {mkv} (fallback)".format(mkv=mux.get("mkv")))
+            if mux.get("mp4_ok") is False:
+                lines.append(
+                    "     mp4: skipped ({msg})".format(
+                        msg=mux.get("mp4_message") or mux.get("mp4_log_tail") or "unknown"
+                    )
+                )
         else:
             lines.append("     mkv: skipped ({msg})".format(msg=mux.get("message") or mux.get("log_tail") or "unknown"))
 

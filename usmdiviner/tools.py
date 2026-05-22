@@ -300,6 +300,156 @@ def mux_to_mkv(
     return ok, proc.stdout[-4000:]
 
 
+def transcode_mkv_to_mp4(
+    ffmpeg: str,
+    input_mkv: Path,
+    output_mp4: Path,
+    timeout: int = 600,
+) -> tuple[bool, str]:
+    if not input_mkv.exists() or input_mkv.stat().st_size == 0:
+        return False, "mkv input does not exist"
+
+    output_mp4.parent.mkdir(parents=True, exist_ok=True)
+    _safe_unlink(output_mp4)
+
+    # Keep the requested core parameters unchanged.
+    cmd = [
+        ffmpeg,
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        str(input_mkv),
+        "-c:v",
+        "libx264",
+        "-preset",
+        "medium",
+        "-crf",
+        "10",
+        "-c:a",
+        "mp3",
+        "-b:a",
+        "1411k",
+        str(output_mp4),
+    ]
+
+    ffmpeg_cwd = None
+    env = os.environ.copy()
+    try:
+        ffmpeg_dir = Path(ffmpeg).resolve().parent
+        ffmpeg_cwd = str(ffmpeg_dir)
+        runtime_dirs = [ffmpeg_dir]
+
+        parent_lib = ffmpeg_dir.parent / "lib"
+        if parent_lib.is_dir():
+            runtime_dirs.append(parent_lib)
+
+        if os.name == "nt":
+            env["PATH"] = os.pathsep.join([str(path) for path in runtime_dirs] + [env.get("PATH", "")])
+        elif sys.platform == "darwin":
+            env["DYLD_LIBRARY_PATH"] = os.pathsep.join(
+                [str(path) for path in runtime_dirs] + ([env["DYLD_LIBRARY_PATH"]] if env.get("DYLD_LIBRARY_PATH") else [])
+            )
+        else:
+            env["LD_LIBRARY_PATH"] = os.pathsep.join(
+                [str(path) for path in runtime_dirs] + ([env["LD_LIBRARY_PATH"]] if env.get("LD_LIBRARY_PATH") else [])
+            )
+    except OSError:
+        ffmpeg_cwd = None
+
+    try:
+        proc = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=timeout,
+            cwd=ffmpeg_cwd,
+            env=env,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        _safe_unlink(output_mp4)
+        raise ExternalToolError(f"ffmpeg mp4 transcode failed: {exc}") from exc
+
+    ok = proc.returncode == 0 and output_mp4.exists() and output_mp4.stat().st_size > 0
+    if not ok:
+        _safe_unlink(output_mp4)
+    return ok, proc.stdout[-4000:]
+
+
+def transcode_ivf_to_mp4(
+    ffmpeg: str,
+    video_path: Path,
+    audio_inputs: list[Path],
+    output_mp4: Path,
+    timeout: int = 600,
+) -> tuple[bool, str]:
+    if not video_path.exists() or video_path.stat().st_size == 0:
+        return False, "video stream does not exist"
+
+    existing_audio = [p for p in audio_inputs if p.exists() and p.stat().st_size > 0]
+
+    output_mp4.parent.mkdir(parents=True, exist_ok=True)
+    _safe_unlink(output_mp4)
+
+    cmd = [ffmpeg, "-y", "-hide_banner", "-loglevel", "error", "-i", str(video_path)]
+    for ap in existing_audio:
+        cmd.extend(["-i", str(ap)])
+    cmd.extend(["-map", "0:v:0"])
+    for i in range(len(existing_audio)):
+        cmd.extend(["-map", f"{i + 1}:a:0"])
+
+    # Keep the existing export profile consistent with mkv->mp4 flow.
+    cmd.extend(["-c:v", "libx264", "-preset", "medium", "-crf", "10"])
+    if existing_audio:
+        cmd.extend(["-c:a", "mp3", "-b:a", "1411k"])
+    cmd.append(str(output_mp4))
+
+    ffmpeg_cwd = None
+    env = os.environ.copy()
+    try:
+        ffmpeg_dir = Path(ffmpeg).resolve().parent
+        ffmpeg_cwd = str(ffmpeg_dir)
+        runtime_dirs = [ffmpeg_dir]
+
+        parent_lib = ffmpeg_dir.parent / "lib"
+        if parent_lib.is_dir():
+            runtime_dirs.append(parent_lib)
+
+        if os.name == "nt":
+            env["PATH"] = os.pathsep.join([str(path) for path in runtime_dirs] + [env.get("PATH", "")])
+        elif sys.platform == "darwin":
+            env["DYLD_LIBRARY_PATH"] = os.pathsep.join(
+                [str(path) for path in runtime_dirs] + ([env["DYLD_LIBRARY_PATH"]] if env.get("DYLD_LIBRARY_PATH") else [])
+            )
+        else:
+            env["LD_LIBRARY_PATH"] = os.pathsep.join(
+                [str(path) for path in runtime_dirs] + ([env["LD_LIBRARY_PATH"]] if env.get("LD_LIBRARY_PATH") else [])
+            )
+    except OSError:
+        ffmpeg_cwd = None
+
+    try:
+        proc = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=timeout,
+            cwd=ffmpeg_cwd,
+            env=env,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        _safe_unlink(output_mp4)
+        raise ExternalToolError(f"ffmpeg mp4 transcode failed: {exc}") from exc
+
+    ok = proc.returncode == 0 and output_mp4.exists() and output_mp4.stat().st_size > 0
+    if not ok:
+        _safe_unlink(output_mp4)
+    return ok, proc.stdout[-4000:]
+
+
 def _safe_unlink(path: Path) -> None:
     try:
         if path.exists():

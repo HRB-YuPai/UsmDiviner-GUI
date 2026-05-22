@@ -27,6 +27,7 @@ from .tools import (
     find_vgmstream,
     mux_to_mkv,
     remove_hcakey_files,
+    transcode_ivf_to_mp4,
     write_hcakey_file,
 )
 from .usm import parse_usm_chunks
@@ -146,6 +147,7 @@ def process_one(
     decoded = _decode_audio(audio_paths, audio_decisions, vgmstream, key1, key2)
     _emit_progress(progress_callback, 78)
     mkv_path = _make_mkv_path(usm_path, opt)
+    mp4_path = _make_mp4_path(usm_path, opt)
     mux_report, mux_success = _maybe_mux(
         opt,
         video_path,
@@ -153,6 +155,7 @@ def process_one(
         audio_decisions,
         decoded,
         mkv_path,
+        mp4_path,
     )
     _cleanup_outputs(
         mux_success,
@@ -223,6 +226,25 @@ def _make_mkv_path(usm_path: Path, opt: ProcessOptions) -> Path:
             rel_hint = ""
 
     file_name = f"{base}.mkv" if not rel_hint else f"{base}__{rel_hint}.mkv"
+    return output_root / file_name
+
+
+def _make_mp4_path(usm_path: Path, opt: ProcessOptions) -> Path:
+    output_root = Path(opt.output_dir)
+    output_root.mkdir(parents=True, exist_ok=True)
+
+    base = usm_path.stem
+    rel_hint = ""
+    if opt.input_root:
+        try:
+            rel = usm_path.resolve().relative_to(Path(opt.input_root).resolve())
+            rel_parent = rel.parent
+            if rel_parent.parts:
+                rel_hint = "__".join(rel_parent.parts)
+        except ValueError:
+            rel_hint = ""
+
+    file_name = f"{base}.mp4" if not rel_hint else f"{base}__{rel_hint}.mp4"
     return output_root / file_name
 
 
@@ -450,6 +472,7 @@ def _maybe_mux(
     audio_decisions: dict[int, AudioDecision],
     decoded: dict[int, dict],
     mkv_path: Path,
+    mp4_path: Path,
 ) -> tuple[dict | None, bool]:
     if not opt.mux_mkv:
         return None, False
@@ -457,7 +480,8 @@ def _maybe_mux(
         return {
             "ok": False,
             "mkv": None,
-            "log_tail": "video stream not found; MKV not created",
+            "mp4": None,
+            "log_tail": "video stream not found; MP4 not created",
         }, False
 
     mux_audio_inputs: list[Path] = []
@@ -470,33 +494,67 @@ def _maybe_mux(
 
     ffmpeg = find_ffmpeg(opt.ffmpeg)
     if not ffmpeg:
-        return {"ok": False, "mkv": None, "log_tail": "ffmpeg not found"}, False
+        return {"ok": False, "mkv": None, "mp4": None, "log_tail": "ffmpeg not found"}, False
 
     try:
-        ok, log = mux_to_mkv(ffmpeg, video_path, mux_audio_inputs, mkv_path)
+        mp4_ok, mp4_log = transcode_ivf_to_mp4(ffmpeg, video_path, mux_audio_inputs, mp4_path)
     except ExternalToolError as exc:
-        logger.warning("mkv mux failed for %s: %s", video_path.name, exc)
-        message = "ffmpeg mux failed; extracted streams were kept"
+        logger.warning("mp4 direct export failed for %s: %s", video_path.name, exc)
+        mp4_ok = False
+        mp4_log = str(exc)
+
+    if mp4_ok:
+        return {
+            "ok": True,
+            "mkv": None,
+            "mp4": str(mp4_path),
+            "mp4_ok": True,
+            "mp4_log_tail": mp4_log[-1000:],
+            "log_tail": mp4_log[-1000:],
+        }, True
+
+    # Final fallback path: if direct MP4 export fails, keep an MKV output.
+    try:
+        mkv_ok, mkv_log = mux_to_mkv(ffmpeg, video_path, mux_audio_inputs, mkv_path)
+    except ExternalToolError as exc:
+        logger.warning("mkv fallback mux failed for %s: %s", video_path.name, exc)
+        message = "mp4 export failed and mkv fallback failed; extracted streams were kept"
         return {
             "ok": False,
             "mkv": None,
+            "mp4": None,
+            "mp4_ok": False,
+            "mp4_message": "direct mp4 export failed; trying mkv fallback",
+            "mp4_log_tail": mp4_log[-1000:],
             "message": message,
             "log_tail": str(exc),
             "streams_kept": True,
         }, False
 
-    if not ok:
-        message = _mux_failure_message(video_path, log)
-        logger.warning("mkv mux skipped for %s: %s", video_path.name, message)
+    if not mkv_ok:
+        message = _mux_failure_message(video_path, mkv_log)
+        logger.warning("mkv fallback skipped for %s: %s", video_path.name, message)
         return {
             "ok": False,
             "mkv": None,
+            "mp4": None,
+            "mp4_ok": False,
+            "mp4_message": "direct mp4 export failed; trying mkv fallback",
+            "mp4_log_tail": mp4_log[-1000:],
             "message": message,
-            "log_tail": log[-1000:],
+            "log_tail": mkv_log[-1000:],
             "streams_kept": True,
         }, False
 
-    return {"ok": True, "mkv": str(mkv_path), "log_tail": log[-1000:]}, True
+    return {
+        "ok": True,
+        "mkv": str(mkv_path),
+        "mp4": None,
+        "mp4_ok": False,
+        "mp4_message": "direct mp4 export failed; MKV was kept as fallback",
+        "mp4_log_tail": mp4_log[-1000:],
+        "log_tail": mkv_log[-1000:],
+    }, True
 
 
 def _mux_failure_message(video_path: Path, log: str) -> str:
@@ -586,7 +644,7 @@ def _build_report(
         "key2_hex_little": key2.hex().upper(),
         "full_key_hex": f"{full_key:016X}",
         "full_key_decimal": str(full_key),
-        "genshin_like_key": genshin_like_key(full_key, usm_path.name),
+        "usm_decrypt_key": genshin_like_key(full_key, usm_path.name),
         "crack": crack_stats,
         "chunks": {
             "total": len(chunks),
