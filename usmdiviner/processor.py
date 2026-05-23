@@ -523,7 +523,7 @@ def _maybe_mux(
         return {"ok": False, "mkv": None, "mp4": None, "log_tail": "ffmpeg not found"}, False
 
     try:
-        mp4_ok, mp4_log = transcode_ivf_to_mp4(ffmpeg, video_path, mux_audio_inputs, mp4_path)
+        mp4_ok, mp4_log = transcode_ivf_to_mp4(ffmpeg, video_path, mux_audio_inputs, None, mp4_path)
     except ExternalToolError as exc:
         logger.warning("mp4 direct export failed for %s: %s", video_path.name, exc)
         mp4_ok = False
@@ -541,7 +541,7 @@ def _maybe_mux(
 
     # Final fallback path: if direct MP4 export fails, keep an MKV output.
     try:
-        mkv_ok, mkv_log = mux_to_mkv(ffmpeg, video_path, mux_audio_inputs, mkv_path)
+        mkv_ok, mkv_log = mux_to_mkv(ffmpeg, video_path, mux_audio_inputs, None, mkv_path)
     except ExternalToolError as exc:
         logger.warning("mkv fallback mux failed for %s: %s", video_path.name, exc)
         message = "mp4 export failed and mkv fallback failed; extracted streams were kept"

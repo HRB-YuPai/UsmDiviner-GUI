@@ -8,7 +8,11 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
+import urllib.error
+import urllib.parse
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -23,7 +27,7 @@ from .keys import parse_full_key
 from .models import ProcessOptions
 from .processor import process_one
 from .tools import find_ffmpeg, find_vgmstream
-from .tools import mux_to_mkv, transcode_ivf_to_mp4
+from .tools import mux_to_mkv, mux_to_mkv_soft, transcode_ivf_to_mp4, transcode_ivf_to_mp4_soft
 from .usm import collect_usm_inputs
 
 logger = logging.getLogger(__name__)
@@ -32,6 +36,24 @@ ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
 LANG_DIR = ASSETS_DIR / "i18n"
 FONT_PATH = ASSETS_DIR / "fonts" / "zh-cn.ttf"
 SUPPORTED_LANGUAGES = ("zh-CN", "zh-TW", "en")
+SUBTITLE_LANG_CODES = (
+    "CHS",
+    "CHT",
+    "DE",
+    "EN",
+    "ES",
+    "FR",
+    "ID",
+    "IT",
+    "JP",
+    "KR",
+    "PT",
+    "RU",
+    "TH",
+    "TR",
+    "VI",
+)
+ONLINE_SUBTITLE_RAW_URL = "https://gitlab.com/Dimbreath/AnimeGameData/-/raw/master/Subtitle/{lang}/{name}.srt"
 SYNC_TEMPLATE_CANDIDATES = (
     ASSETS_DIR / "usm_template" / "versions_template.json",
     ASSETS_DIR / "versions_reference.json",
@@ -46,7 +68,7 @@ def _load_translations() -> dict[str, dict[str, str]]:
     translations: dict[str, dict[str, str]] = {}
     for lang in SUPPORTED_LANGUAGES:
         path = LANG_DIR / f"{lang}.json"
-        with path.open("r", encoding="utf-8") as fp:
+        with path.open("r", encoding="utf-8-sig") as fp:
             translations[lang] = json.load(fp)
     return translations
 
@@ -281,6 +303,15 @@ HTML_TEMPLATE = """<!doctype html>
             transform: translateY(-1px);
         }
 
+        .select-trigger:disabled,
+        .select-trigger:disabled:hover {
+            cursor: not-allowed;
+            opacity: 0.58;
+            transform: none;
+            border-color: var(--line);
+            box-shadow: inset 0 1px 0 #ffffff10;
+        }
+
         .select-trigger:focus-visible {
             outline: none;
             border-color: var(--acc);
@@ -419,6 +450,16 @@ HTML_TEMPLATE = """<!doctype html>
             background: linear-gradient(180deg, #ffffff05, #00000010);
         }
 
+
+        .compat-summary {
+            font-size: 11px;
+            color: var(--muted);
+            line-height: 1.4;
+            padding: 0 10px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
         .top-pane {
             padding: 10px;
         }
@@ -428,14 +469,15 @@ HTML_TEMPLATE = """<!doctype html>
             display: flex;
             flex-direction: column;
             gap: 8px;
-            padding: 8px;
+            padding: 8px 0 0;
         }
 
         .footer-pane {
             display: grid;
             grid-template-columns: 1fr;
             gap: 8px;
-            padding: 8px;
+            padding: 0;
+            overflow: hidden;
         }
 
         .actions-bar {
@@ -490,16 +532,90 @@ HTML_TEMPLATE = """<!doctype html>
 
         .mode {
             display: flex;
-            gap: 12px;
+            gap: 8px;
             align-items: center;
         }
 
-        .mode label {
-            display: flex;
-            gap: 6px;
-            align-items: center;
+        .mode input[type="radio"] {
+            position: absolute;
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .mode-toggle {
+            border: 0;
+            border-radius: 0;
+            background: transparent;
             color: var(--fg);
+            min-height: 30px;
+            padding: 0;
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            cursor: pointer;
             font-size: 12px;
+            font-family: "UsmDivinerZh", "Segoe UI", "Noto Sans", "Microsoft YaHei", "PingFang TC", sans-serif;
+            box-shadow: none;
+        }
+
+        .mode-toggle:focus-visible {
+            outline: none;
+            box-shadow: 0 0 0 4px var(--focus-ring);
+            border-radius: 8px;
+        }
+
+        .mode-toggle-text {
+            color: var(--muted);
+            white-space: nowrap;
+            transition: color 200ms ease, opacity 200ms ease;
+        }
+
+        .mode-toggle-track {
+            width: 34px;
+            height: 18px;
+            border-radius: 999px;
+            border: 1px solid var(--line);
+            background: color-mix(in srgb, var(--surface-2) 80%, transparent);
+            position: relative;
+            flex: 0 0 auto;
+            transition: background 220ms ease, border-color 220ms ease;
+        }
+
+        .mode-toggle-thumb {
+            position: absolute;
+            top: 1px;
+            left: 1px;
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            background: linear-gradient(180deg, #ffffff, color-mix(in srgb, #ffffff 78%, var(--acc) 22%));
+            box-shadow: 0 1px 3px #00000055;
+            transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1), background 220ms ease;
+        }
+
+        .mode[data-mode="single"] .mode-toggle-text-single,
+        .mode[data-mode="batch"] .mode-toggle-text-batch {
+            color: var(--fg);
+        }
+
+        .mode[data-mode="single"] .mode-toggle-text-batch,
+        .mode[data-mode="batch"] .mode-toggle-text-single {
+            opacity: 0.72;
+        }
+
+        .mode[data-mode="batch"] .mode-toggle-thumb {
+            transform: translateX(16px);
+            background: linear-gradient(180deg, color-mix(in srgb, #ffffff 70%, var(--acc) 30%), var(--acc));
+        }
+
+        .mode[data-mode="single"] .mode-toggle-track {
+            border-color: color-mix(in srgb, #2f89ff 55%, var(--line) 45%);
+            background: linear-gradient(90deg, color-mix(in srgb, #2f89ff 54%, transparent), color-mix(in srgb, #6ec3ff 42%, transparent));
+        }
+
+        .mode[data-mode="batch"] .mode-toggle-track {
+            border-color: color-mix(in srgb, #ff7a2f 55%, var(--line) 45%);
+            background: linear-gradient(90deg, color-mix(in srgb, #ff7a2f 54%, transparent), color-mix(in srgb, #ffb347 44%, transparent));
         }
 
         label {
@@ -571,7 +687,7 @@ HTML_TEMPLATE = """<!doctype html>
 
         .section-title {
             margin: 0;
-            padding: 0 2px;
+            padding: 0 10px;
             color: var(--muted);
             font-size: 11px;
             font-weight: 700;
@@ -581,8 +697,11 @@ HTML_TEMPLATE = """<!doctype html>
 
         .table-wrap {
             position: relative;
-            border: 1px solid var(--line);
-            border-radius: 10px;
+            border-top: 1px solid var(--line);
+            border-left: 0;
+            border-right: 0;
+            border-bottom: 0;
+            border-radius: 0 0 10px 10px;
             background: var(--surface);
             overflow: auto;
             min-height: 0;
@@ -703,16 +822,18 @@ HTML_TEMPLATE = """<!doctype html>
         }
 
         .progress-wrap {
-            display: grid;
-            grid-template-columns: 1fr;
-            gap: 10px;
-            align-items: center;
-            padding: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            padding: 12px 14px;
+            background: var(--panel1);
+            border: 0;
+            min-height: 100%;
         }
 
         .progress-head {
             display: flex;
-            align-items: center;
+            align-items: baseline;
             justify-content: space-between;
             gap: 10px;
         }
@@ -722,6 +843,7 @@ HTML_TEMPLATE = """<!doctype html>
             font-size: 11px;
             font-weight: 600;
             letter-spacing: 0.2px;
+            line-height: 1;
         }
 
         .progress-track {
@@ -746,6 +868,7 @@ HTML_TEMPLATE = """<!doctype html>
             font-size: 11px;
             font-weight: 700;
             letter-spacing: 0.2px;
+            line-height: 1;
             font-family: "UsmDivinerZh", "Segoe UI", "Noto Sans", "Microsoft YaHei", "PingFang TC", sans-serif;
         }
 
@@ -895,31 +1018,223 @@ HTML_TEMPLATE = """<!doctype html>
         }
 
         .video-export-card {
-            width: min(980px, 96vw);
-            height: min(680px, 86vh);
+            width: min(1040px, 96vw);
+            height: min(760px, 92vh);
+        }
+
+        #video_export_modal .modal-head {
+            justify-content: center;
+        }
+
+        #video_export_modal .modal-head > span {
+            width: 100%;
+            text-align: center;
         }
 
         .video-export-body {
             flex: 1;
             min-height: 0;
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
+            display: grid;
+            grid-template-rows: auto minmax(0, 1fr) auto;
+            gap: 12px;
             padding: 12px 14px;
         }
 
-        .video-export-config {
-            display: grid;
-            grid-template-columns: 120px 1fr;
-            gap: 8px 10px;
-            align-items: center;
+        .video-export-sections {
+            min-width: 0;
         }
 
-        .video-export-config .field-row {
+        .video-export-section {
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            background: linear-gradient(180deg, color-mix(in srgb, var(--surface) 94%, #ffffff 6%), color-mix(in srgb, var(--surface) 97%, #000000 3%));
+            padding: 12px;
             display: grid;
-            grid-template-columns: 1fr auto;
-            gap: 8px;
+            gap: 10px;
+            min-width: 0;
+        }
+
+        .video-export-config,
+        .video-export-subtitle-row {
+            display: flex;
+            gap: 10px 12px;
+            align-items: stretch;
+            flex-wrap: nowrap;
+            min-width: 0;
+        }
+
+        .video-export-inline-group {
+            display: grid;
             align-items: center;
+            gap: 7px;
+            min-width: 0;
+        }
+
+        .video-export-inline-group label {
+            white-space: nowrap;
+            color: var(--muted);
+            font-size: 12px;
+            font-weight: 500;
+        }
+
+        .video-export-format-group {
+            flex: 0 1 200px;
+            grid-template-columns: max-content minmax(86px, 1fr);
+        }
+
+        .video-export-output-group {
+            flex: 1 1 340px;
+            grid-template-columns: max-content minmax(180px, 1fr) auto;
+        }
+
+        .video-export-audio-group {
+            flex: 1 1 260px;
+            grid-template-columns: max-content minmax(170px, 1fr);
+        }
+
+        .video-export-subtitle-source-group {
+            flex: 0 1 200px;
+            grid-template-columns: max-content minmax(100px, 1fr);
+        }
+
+        .video-export-subtitle-lang-group,
+        .video-export-mode-group {
+            flex: 1 1 240px;
+            grid-template-columns: max-content minmax(140px, 1fr);
+        }
+
+        .video-export-subtitle-local-group {
+            flex: 1 1 300px;
+            grid-template-columns: max-content minmax(0, 1fr);
+        }
+
+        .video-export-hybrid-group {
+            flex: 0 1 220px;
+            grid-template-columns: max-content minmax(84px, 1fr);
+        }
+
+        .video-export-config input[type="text"],
+        .video-export-config select,
+        .video-export-subtitle-row input[type="text"],
+        .video-export-subtitle-row select {
+            min-width: 0;
+        }
+
+        .video-export-config input[type="text"],
+        .video-export-select,
+        #video_export_hybrid_limit {
+            height: 34px;
+            box-sizing: border-box;
+            min-width: 0;
+        }
+
+        #video_export_output_pick_btn {
+            min-height: 34px;
+            padding: 6px 14px;
+            white-space: nowrap;
+        }
+
+        .video-export-config .video-export-format-select {
+            width: 100%;
+        }
+
+        .video-export-audio-shell {
+            min-width: 0;
+        }
+
+        .video-export-audio-shell .select-trigger {
+            min-height: 34px;
+            border-radius: 10px;
+        }
+
+        .multi-select-menu {
+            min-width: 260px;
+            max-width: min(560px, calc(100vw - 72px));
+        }
+
+        .video-export-audio-shell .multi-select-menu,
+        #video_export_subtitle_lang_shell .multi-select-menu {
+            left: auto;
+            right: 0;
+            width: max(100%, 260px);
+            max-width: min(520px, calc(100vw - 24px));
+        }
+
+        .multi-select-actions {
+            display: flex;
+            gap: 8px;
+            padding: 2px 2px 8px;
+        }
+
+        .multi-select-action {
+            flex: 1;
+            border: 1px solid var(--input-border);
+            border-radius: 8px;
+            background: var(--input-bg);
+            color: var(--fg);
+            padding: 6px 8px;
+            font-size: 11px;
+            font-family: "UsmDivinerZh", "Segoe UI", "Noto Sans", "Microsoft YaHei", "PingFang TC", sans-serif;
+            cursor: pointer;
+        }
+
+        .multi-select-action:hover,
+        .multi-select-action:focus-visible {
+            outline: none;
+            border-color: var(--acc);
+            box-shadow: 0 0 0 3px var(--focus-ring);
+        }
+
+        .multi-select-options {
+            display: grid;
+            gap: 6px;
+        }
+
+        .multi-select-options.two-col {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 6px 8px;
+        }
+
+        .multi-select-option {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 8px;
+            border: 1px solid transparent;
+            border-radius: 8px;
+            background: transparent;
+            color: var(--fg);
+            cursor: pointer;
+            font-size: 12px;
+            font-family: "UsmDivinerZh", "Segoe UI", "Noto Sans", "Microsoft YaHei", "PingFang TC", sans-serif;
+            min-width: 0;
+        }
+
+        .multi-select-option:hover {
+            background: transparent;
+            border-color: transparent;
+        }
+
+        .multi-select-option input[type="checkbox"] {
+            appearance: auto;
+            -webkit-appearance: auto;
+            width: 16px;
+            height: 16px;
+            margin: 0;
+            accent-color: var(--acc);
+            flex: 0 0 auto;
+        }
+
+        .multi-select-option input[type="checkbox"]:focus-visible {
+            outline: none;
+            box-shadow: 0 0 0 3px var(--focus-ring);
+        }
+
+        .multi-select-option span {
+            min-width: 0;
+            overflow: hidden;
+            white-space: nowrap;
+            text-overflow: ellipsis;
         }
 
         .video-export-select {
@@ -934,30 +1249,92 @@ HTML_TEMPLATE = """<!doctype html>
             font-family: "UsmDivinerZh", "Segoe UI", "Noto Sans", "Microsoft YaHei", "PingFang TC", sans-serif;
         }
 
+        .video-export-select:focus,
+        #video_export_hybrid_limit:focus,
+        #video_export_output:focus {
+            border-color: var(--acc);
+            box-shadow: 0 0 0 3px var(--focus-ring);
+        }
+
+        #video_export_hybrid_limit {
+            min-width: 0;
+            border-radius: 8px;
+            border: 1px solid var(--input-border);
+            background: var(--input-bg);
+            color: var(--fg);
+            padding: 7px 9px;
+            font-size: 12px;
+            outline: none;
+            font-family: "UsmDivinerZh", "Segoe UI", "Noto Sans", "Microsoft YaHei", "PingFang TC", sans-serif;
+        }
+
+        .video-export-subtitle-row {
+            padding-top: 8px;
+            margin-top: 8px;
+            border-top: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+        }
+
+        .video-export-strategy-row {
+            display: none;
+        }
+
+        .video-export-subtitle-row .actions {
+            display: grid;
+            grid-template-columns: auto minmax(0, 1fr);
+            align-items: center;
+            gap: 8px;
+            min-width: 0;
+        }
+
+        #video_export_subtitle_pick_btn {
+            min-height: 34px;
+            padding: 6px 14px;
+            white-space: nowrap;
+        }
+
+        .video-export-subtitle-row .sub-local-info {
+            min-width: 0;
+            font-size: 11px;
+            color: var(--muted);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            padding: 0 6px;
+            line-height: 32px;
+            border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+            border-radius: 8px;
+            background: color-mix(in srgb, var(--input-bg) 90%, transparent);
+        }
+
         .video-export-list {
             border: 1px solid var(--line);
-            border-radius: 10px;
+            border-radius: 12px;
             background: var(--surface);
             min-height: 0;
             flex: 1;
             overflow: auto;
+            min-width: 0;
         }
 
         .video-export-table {
             width: 100%;
             border-collapse: collapse;
             table-layout: fixed;
-            font-size: 12px;
         }
 
         .video-export-table th,
         .video-export-table td {
-            border-bottom: 1px solid var(--line);
-            padding: 8px;
-            text-align: left;
+            border-bottom: 1px solid color-mix(in srgb, var(--line) 78%, transparent);
+            padding: 8px 10px;
+            text-align: center;
+            vertical-align: middle;
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
+            font-size: 12px;
+            cursor: default;
+            user-select: none;
+            -webkit-user-select: none;
         }
 
         .video-export-table th {
@@ -968,10 +1345,66 @@ HTML_TEMPLATE = """<!doctype html>
             font-size: 11px;
             text-transform: uppercase;
             letter-spacing: 0.2px;
+            z-index: 1;
+        }
+
+        .video-export-table th:nth-child(1),
+        .video-export-table td:nth-child(1) {
+            width: 36%;
+        }
+
+        .video-export-table th:nth-child(2),
+        .video-export-table td:nth-child(2) {
+            width: 14%;
+            text-align: center;
+        }
+
+        .video-export-table th:nth-child(3),
+        .video-export-table td:nth-child(3) {
+            width: 31%;
+            text-align: center;
+        }
+
+        .video-export-table th:nth-child(4),
+        .video-export-table td:nth-child(4) {
+            width: 19%;
+        }
+
+        .video-export-table tbody tr:hover {
+            background: color-mix(in srgb, var(--surface-2) 78%, transparent);
+        }
+
+        .video-export-audio-cell {
+            color: var(--muted);
+        }
+
+        .video-export-audio-cell.has-audio {
+            color: var(--fg);
+        }
+
+        .video-export-audio-cell .audio-track-list {
+            display: block;
+            overflow: hidden;
+            white-space: nowrap;
+            text-overflow: ellipsis;
+            text-align: center;
         }
 
         .video-export-progress {
-            width: min(180px, 100%);
+            width: min(102px, 100%);
+            margin: 0 auto;
+        }
+
+        .video-export-progress .mini-label {
+            text-align: right;
+        }
+
+        #video_export_modal .progress-wrap {
+            margin-top: 0;
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            background: linear-gradient(180deg, color-mix(in srgb, var(--surface) 92%, #ffffff 8%), color-mix(in srgb, var(--surface) 95%, #000000 5%));
+            padding: 10px 12px;
         }
 
         .modal {
@@ -1672,6 +2105,24 @@ HTML_TEMPLATE = """<!doctype html>
             .row { grid-template-columns: 1fr; }
             .blk-row { grid-template-columns: 1fr; }
             .opts { grid-template-columns: 1fr; }
+            .video-export-config,
+            .video-export-subtitle-row { flex-direction: column; }
+            .video-export-inline-group { width: 100%; }
+            .video-export-strategy-row { grid-template-columns: 1fr; }
+            .video-export-section { padding: 9px 10px; }
+            #video_export_modal .progress-wrap { padding: 9px 10px; }
+            .video-export-format-group,
+            .video-export-output-group,
+            .video-export-audio-group,
+            .video-export-subtitle-source-group,
+            .video-export-subtitle-lang-group,
+            .video-export-mode-group,
+            .video-export-subtitle-local-group,
+            .video-export-hybrid-group { grid-template-columns: 1fr; }
+            .video-export-subtitle-row .actions {
+                grid-template-columns: 1fr;
+            }
+            .multi-select-options.two-col { grid-template-columns: 1fr; }
             .actions { justify-content: flex-end; flex-wrap: wrap; }
             .actions .btn { width: auto; }
 
@@ -1711,9 +2162,14 @@ HTML_TEMPLATE = """<!doctype html>
                     <div class="form-block">
                         <div class="mode-row">
                             <label id="analysis_mode_text">Mode</label>
-                            <div class="mode">
-                                <label><input type="radio" name="input_mode" id="mode_single" value="single" checked onchange="syncInputMode()" /> <span id="single_file_text">File selection</span></label>
-                                <label><input type="radio" name="input_mode" id="mode_batch" value="batch" onchange="syncInputMode()" /> <span id="batch_folder_text">Folder selection</span></label>
+                            <div class="mode" id="mode_switch" data-mode="single">
+                                <input type="radio" name="input_mode" id="mode_single" value="single" checked onchange="syncInputMode()" />
+                                <input type="radio" name="input_mode" id="mode_batch" value="batch" onchange="syncInputMode()" />
+                                <button type="button" id="mode_toggle_btn" class="mode-toggle" onclick="toggleInputMode()" aria-label="Toggle analysis mode">
+                                    <span id="single_file_text" class="mode-toggle-text mode-toggle-text-single">File selection</span>
+                                    <span class="mode-toggle-track" aria-hidden="true"><span class="mode-toggle-thumb"></span></span>
+                                    <span id="batch_folder_text" class="mode-toggle-text mode-toggle-text-batch">Folder selection</span>
+                                </button>
                             </div>
                         </div>
                         <div class="form-cols">
@@ -1748,6 +2204,7 @@ HTML_TEMPLATE = """<!doctype html>
 
                 <div class="table-pane">
                     <div class="section-title" id="file_list_title">USM file list</div>
+                    <div class="compat-summary" id="file_compat_summary"></div>
                     <div class="table-wrap">
                     <table class="file-table">
                         <colgroup>
@@ -1968,17 +2425,111 @@ HTML_TEMPLATE = """<!doctype html>
                 <span id="video_export_title">Export Video</span>
             </div>
             <div class="video-export-body">
-                <div class="video-export-config">
-                    <label id="video_export_format_label" for="video_export_format">Format</label>
-                    <select id="video_export_format" class="video-export-select">
-                        <option value="mp4">MP4</option>
-                        <option value="mkv">MKV</option>
-                    </select>
+                <div class="video-export-sections">
+                    <div class="video-export-section">
+                        <div class="video-export-config">
+                            <div class="video-export-inline-group video-export-format-group">
+                                <label id="video_export_format_label" for="video_export_format">Format</label>
+                                <select id="video_export_format" class="video-export-select video-export-format-select">
+                                    <option value="mp4">MP4</option>
+                                    <option value="mkv">MKV</option>
+                                </select>
+                            </div>
 
-                    <label id="video_export_output_label" for="video_export_output">Output</label>
-                    <div class="field-row">
-                        <input id="video_export_output" type="text" placeholder="" />
-                        <button class="btn" id="video_export_output_pick_btn" onclick="pickVideoExportOutput()">Browse</button>
+                            <div class="video-export-inline-group video-export-output-group">
+                                <label id="video_export_output_label" for="video_export_output">Output</label>
+                                <input id="video_export_output" type="text" placeholder="" readonly aria-readonly="true" />
+                                <button class="btn" id="video_export_output_pick_btn" onclick="pickVideoExportOutput()">Browse</button>
+                            </div>
+
+                            <div class="video-export-inline-group video-export-audio-group">
+                                <label id="video_export_audio_label" for="video_export_audio_trigger">Audio</label>
+                                <div id="video_export_audio_shell" class="select-shell video-export-shell video-export-audio-shell">
+                                    <button type="button" id="video_export_audio_trigger" class="select-trigger" aria-haspopup="listbox" aria-expanded="false">
+                                        <span id="video_export_audio_summary" class="select-trigger-label">All audio tracks</span>
+                                        <span class="select-trigger-icon"></span>
+                                    </button>
+                                    <div id="video_export_audio_menu" class="select-menu multi-select-menu" role="listbox" aria-multiselectable="true">
+                                        <div class="multi-select-actions">
+                                            <button type="button" class="multi-select-action" id="video_export_audio_all_btn">All</button>
+                                            <button type="button" class="multi-select-action" id="video_export_audio_none_btn">None</button>
+                                        </div>
+                                        <div class="multi-select-options two-col">
+                                            <label class="multi-select-option"><input type="checkbox" id="video_export_audio_ch0" checked /><span id="video_export_audio_ch0_label">Chinese</span></label>
+                                            <label class="multi-select-option"><input type="checkbox" id="video_export_audio_ch1" checked /><span id="video_export_audio_ch1_label">English</span></label>
+                                            <label class="multi-select-option"><input type="checkbox" id="video_export_audio_ch2" checked /><span id="video_export_audio_ch2_label">Japanese</span></label>
+                                            <label class="multi-select-option"><input type="checkbox" id="video_export_audio_ch3" checked /><span id="video_export_audio_ch3_label">Korean</span></label>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="video-export-subtitle-row">
+                            <div class="video-export-inline-group video-export-subtitle-source-group">
+                                <label id="video_export_subtitle_source_label" for="video_export_subtitle_source">Subtitles</label>
+                                <select id="video_export_subtitle_source" class="video-export-select video-export-subtitle-source-select" onchange="updateVideoExportSubtitleSourceUi()">
+                                    <option value="off">Off</option>
+                                    <option value="local">Local Files</option>
+                                    <option value="online">Online</option>
+                                </select>
+                            </div>
+
+                            <div class="video-export-inline-group video-export-subtitle-lang-group">
+                                <label id="video_export_subtitle_lang_label" for="video_export_subtitle_lang_trigger">Languages</label>
+                                <div id="video_export_subtitle_lang_shell" class="select-shell video-export-shell video-export-audio-shell">
+                                    <button type="button" id="video_export_subtitle_lang_trigger" class="select-trigger" aria-haspopup="listbox" aria-expanded="false">
+                                        <span id="video_export_subtitle_lang_summary" class="select-trigger-label">All languages</span>
+                                        <span class="select-trigger-icon"></span>
+                                    </button>
+                                    <div id="video_export_subtitle_lang_menu" class="select-menu multi-select-menu" role="listbox" aria-multiselectable="true">
+                                        <div class="multi-select-actions">
+                                            <button type="button" class="multi-select-action" id="video_export_subtitle_lang_all_btn">All</button>
+                                            <button type="button" class="multi-select-action" id="video_export_subtitle_lang_none_btn">None</button>
+                                        </div>
+                                        <div class="multi-select-options two-col">
+                                            <label class="multi-select-option"><input type="checkbox" id="video_export_subtitle_lang_CHS" checked /><span id="video_export_subtitle_lang_CHS_label">Simplified Chinese</span></label>
+                                            <label class="multi-select-option"><input type="checkbox" id="video_export_subtitle_lang_CHT" checked /><span id="video_export_subtitle_lang_CHT_label">Traditional Chinese</span></label>
+                                            <label class="multi-select-option"><input type="checkbox" id="video_export_subtitle_lang_DE" checked /><span id="video_export_subtitle_lang_DE_label">German</span></label>
+                                            <label class="multi-select-option"><input type="checkbox" id="video_export_subtitle_lang_EN" checked /><span id="video_export_subtitle_lang_EN_label">English</span></label>
+                                            <label class="multi-select-option"><input type="checkbox" id="video_export_subtitle_lang_ES" checked /><span id="video_export_subtitle_lang_ES_label">Spanish</span></label>
+                                            <label class="multi-select-option"><input type="checkbox" id="video_export_subtitle_lang_FR" checked /><span id="video_export_subtitle_lang_FR_label">French</span></label>
+                                            <label class="multi-select-option"><input type="checkbox" id="video_export_subtitle_lang_ID" checked /><span id="video_export_subtitle_lang_ID_label">Indonesian</span></label>
+                                            <label class="multi-select-option"><input type="checkbox" id="video_export_subtitle_lang_IT" checked /><span id="video_export_subtitle_lang_IT_label">Italian</span></label>
+                                            <label class="multi-select-option"><input type="checkbox" id="video_export_subtitle_lang_JP" checked /><span id="video_export_subtitle_lang_JP_label">Japanese</span></label>
+                                            <label class="multi-select-option"><input type="checkbox" id="video_export_subtitle_lang_KR" checked /><span id="video_export_subtitle_lang_KR_label">Korean</span></label>
+                                            <label class="multi-select-option"><input type="checkbox" id="video_export_subtitle_lang_PT" checked /><span id="video_export_subtitle_lang_PT_label">Portuguese</span></label>
+                                            <label class="multi-select-option"><input type="checkbox" id="video_export_subtitle_lang_RU" checked /><span id="video_export_subtitle_lang_RU_label">Russian</span></label>
+                                            <label class="multi-select-option"><input type="checkbox" id="video_export_subtitle_lang_TH" checked /><span id="video_export_subtitle_lang_TH_label">Thai</span></label>
+                                            <label class="multi-select-option"><input type="checkbox" id="video_export_subtitle_lang_TR" checked /><span id="video_export_subtitle_lang_TR_label">Turkish</span></label>
+                                            <label class="multi-select-option"><input type="checkbox" id="video_export_subtitle_lang_VI" checked /><span id="video_export_subtitle_lang_VI_label">Vietnamese</span></label>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="video-export-inline-group video-export-mode-group">
+                                <label id="video_export_mode_label" for="video_export_mode">Export Strategy</label>
+                                <select id="video_export_mode" class="video-export-select" onchange="updateVideoExportModeUi()">
+                                    <option value="container">Container (multi audio + multi subtitles)</option>
+                                    <option value="burn">Hard Subtitle (multiple files)</option>
+                                    <option value="hybrid">Hybrid (container + hard subtitle)</option>
+                                </select>
+                            </div>
+
+                            <div id="video_export_subtitle_local_group" class="video-export-inline-group video-export-subtitle-local-group">
+                                <label id="video_export_subtitle_local_label" for="video_export_subtitle_pick_btn">Local</label>
+                                <div id="video_export_subtitle_local_actions" class="actions" style="justify-content:flex-start;gap:8px;min-width:0;">
+                                    <button class="btn" id="video_export_subtitle_pick_btn" onclick="pickVideoExportSubtitles()">Pick</button>
+                                    <span id="video_export_subtitle_local_info" class="sub-local-info">No subtitle file selected</span>
+                                </div>
+                            </div>
+
+                            <div id="video_export_hybrid_group" class="video-export-inline-group video-export-hybrid-group">
+                                <label id="video_export_hybrid_limit_label" for="video_export_hybrid_limit">Hybrid hard-sub count</label>
+                                <input id="video_export_hybrid_limit" type="number" min="1" max="8" step="1" value="2" />
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -1988,6 +2539,7 @@ HTML_TEMPLATE = """<!doctype html>
                             <tr>
                                 <th id="video_export_th_name">Name</th>
                                 <th id="video_export_th_status">Status</th>
+                                <th id="video_export_th_audio">Audio</th>
                                 <th id="video_export_th_progress">Progress</th>
                             </tr>
                         </thead>
@@ -2056,6 +2608,22 @@ HTML_TEMPLATE = """<!doctype html>
         </div>
     </div>
 
+    <div id="video_export_subtitle_convert_modal" class="modal hidden">
+        <div class="modal-card confirm-save-card">
+            <div class="modal-head">
+                <span id="video_export_subtitle_convert_title">Convert subtitles to ASS?</span>
+            </div>
+            <div class="confirm-save-body">
+                <div id="video_export_subtitle_convert_message" class="confirm-save-message"></div>
+            </div>
+            <div class="modal-actions">
+                <button class="btn" id="video_export_subtitle_convert_yes_btn" onclick="confirmVideoExportSubtitleConversion('ass')">Convert to ASS</button>
+                <button class="btn" id="video_export_subtitle_convert_no_btn" onclick="confirmVideoExportSubtitleConversion('original')">Use Original</button>
+                <button class="btn" id="video_export_subtitle_convert_cancel_btn" onclick="closeVideoExportSubtitleConvertModal()">Cancel</button>
+            </div>
+        </div>
+    </div>
+
     <div id="blk_save_success_modal" class="modal hidden">
         <div class="modal-card save-success-card">
             <div class="modal-head">
@@ -2092,6 +2660,9 @@ HTML_TEMPLATE = """<!doctype html>
         let videoExportCandidates = [];
         let videoExportRows = new Map();
         let videoExportRunning = false;
+        let videoExportLocalSubtitleFiles = [];
+        let pendingVideoExportPayload = null;
+        let pendingVideoExportSubtitlePromptInfo = null;
         let progressPumpTimer = null;
         let overallProgressCurrent = 0;
         let overallProgressTarget = 0;
@@ -2117,9 +2688,413 @@ HTML_TEMPLATE = """<!doctype html>
             return byId("theme_select").value || "dark";
         }
 
+        function videoExportAudioShell() {
+            return byId("video_export_audio_shell");
+        }
+
+        function videoExportSubtitleLangShell() {
+            return byId("video_export_subtitle_lang_shell");
+        }
+
+        function videoExportAudioSummary() {
+            return byId("video_export_audio_summary");
+        }
+
+        function videoExportSelectedChannels() {
+            const channels = [];
+            for (let ch = 0; ch < 4; ch++) {
+                const el = byId(`video_export_audio_ch${ch}`);
+                if (el && el.checked) channels.push(ch);
+            }
+            return channels;
+        }
+
+        function refreshVideoExportAudioSummary() {
+            const dict = t(currentLang());
+            const shell = videoExportAudioShell();
+            const summary = videoExportAudioSummary();
+            if (!shell || !summary) return;
+
+            const labels = [];
+            for (let ch = 0; ch < 4; ch++) {
+                const box = byId(`video_export_audio_ch${ch}`);
+                const label = byId(`video_export_audio_ch${ch}_label`);
+                if (box && box.checked) {
+                    labels.push(String(label && label.textContent ? label.textContent : "").trim());
+                }
+            }
+
+            if (!labels.length) {
+                summary.textContent = dict.video_export_audio_none || dict.video_export_audio_silent || "Silent video";
+            } else if (labels.length === 4) {
+                summary.textContent = dict.video_export_audio_all || "All audio tracks";
+            } else {
+                summary.textContent = labels.join(" / ");
+            }
+            shell.setAttribute("data-summary", summary.textContent);
+        }
+
+        function setVideoExportAudioAll(checked) {
+            for (let ch = 0; ch < 4; ch++) {
+                const el = byId(`video_export_audio_ch${ch}`);
+                if (el) el.checked = checked;
+            }
+            refreshVideoExportAudioSummary();
+            refreshVideoExportRowsLanguage();
+        }
+
+        function toggleVideoExportAudioShell(forceOpen = null) {
+            const shell = videoExportAudioShell();
+            const trigger = byId("video_export_audio_trigger");
+            if (!shell || !trigger) return;
+            const willOpen = forceOpen === null ? !shell.classList.contains("open") : !!forceOpen;
+            shell.classList.toggle("open", willOpen);
+            trigger.setAttribute("aria-expanded", willOpen ? "true" : "false");
+            if (willOpen) refreshVideoExportAudioSummary();
+        }
+
+        function closeVideoExportAudioShell() {
+            const shell = videoExportAudioShell();
+            const trigger = byId("video_export_audio_trigger");
+            if (!shell || !trigger) return;
+            shell.classList.remove("open");
+            trigger.setAttribute("aria-expanded", "false");
+        }
+
+        function videoExportSelectedSubtitleLanguages() {
+            const codes = ["CHS", "CHT", "DE", "EN", "ES", "FR", "ID", "IT", "JP", "KR", "PT", "RU", "TH", "TR", "VI"];
+            const selected = [];
+            for (const code of codes) {
+                const el = byId(`video_export_subtitle_lang_${code}`);
+                if (el && el.checked) selected.push(code);
+            }
+            return selected;
+        }
+
+        function refreshVideoExportSubtitleLangSummary() {
+            const dict = t(currentLang());
+            const shell = videoExportSubtitleLangShell();
+            const summary = byId("video_export_subtitle_lang_summary");
+            if (!shell || !summary) return;
+            const selectedCodes = videoExportSelectedSubtitleLanguages();
+            if (!selectedCodes.length) {
+                summary.textContent = dict.video_export_subtitle_lang_none || "No language";
+            } else if (selectedCodes.length === 15) {
+                summary.textContent = dict.video_export_subtitle_lang_all || "All languages";
+            } else {
+                const names = selectedCodes
+                    .map((code) => {
+                        const label = byId(`video_export_subtitle_lang_${code}_label`);
+                        return String((label && label.textContent) || code).trim();
+                    })
+                    .filter(Boolean);
+                summary.textContent = names.join(" / ");
+            }
+        }
+
+        function setVideoExportSubtitleLangAll(checked) {
+            const codes = ["CHS", "CHT", "DE", "EN", "ES", "FR", "ID", "IT", "JP", "KR", "PT", "RU", "TH", "TR", "VI"];
+            for (const code of codes) {
+                const el = byId(`video_export_subtitle_lang_${code}`);
+                if (el) el.checked = checked;
+            }
+            refreshVideoExportSubtitleLangSummary();
+        }
+
+        function toggleVideoExportSubtitleLangShell(forceOpen = null) {
+            const shell = videoExportSubtitleLangShell();
+            const trigger = byId("video_export_subtitle_lang_trigger");
+            if (!shell || !trigger) return;
+            if (trigger.disabled) {
+                closeVideoExportSubtitleLangShell();
+                return;
+            }
+            const willOpen = forceOpen === null ? !shell.classList.contains("open") : !!forceOpen;
+            shell.classList.toggle("open", willOpen);
+            trigger.setAttribute("aria-expanded", willOpen ? "true" : "false");
+            if (willOpen) refreshVideoExportSubtitleLangSummary();
+        }
+
+        function closeVideoExportSubtitleLangShell() {
+            const shell = videoExportSubtitleLangShell();
+            const trigger = byId("video_export_subtitle_lang_trigger");
+            if (!shell || !trigger) return;
+            shell.classList.remove("open");
+            trigger.setAttribute("aria-expanded", "false");
+        }
+
+        function updateVideoExportSubtitleLocalInfo() {
+            const dict = t(currentLang());
+            const info = byId("video_export_subtitle_local_info");
+            if (!info) return;
+            const count = videoExportLocalSubtitleFiles.length;
+            if (!count) {
+                info.textContent = dict.video_export_subtitle_local_none || "No subtitle file selected";
+                return;
+            }
+            info.textContent = (dict.video_export_subtitle_local_count || "Selected {count} file(s)").replace("{count}", String(count));
+        }
+
+        function updateVideoExportSubtitleSourceUi() {
+            const source = String((byId("video_export_subtitle_source") && byId("video_export_subtitle_source").value) || "off");
+            const localGroup = byId("video_export_subtitle_local_group");
+            const pickBtn = byId("video_export_subtitle_pick_btn");
+            const localInfo = byId("video_export_subtitle_local_info");
+            const langShell = byId("video_export_subtitle_lang_shell");
+            const langTrigger = byId("video_export_subtitle_lang_trigger");
+            const langAllBtn = byId("video_export_subtitle_lang_all_btn");
+            const langNoneBtn = byId("video_export_subtitle_lang_none_btn");
+            const showLocal = source === "local";
+            if (localGroup) localGroup.style.display = showLocal ? "" : "none";
+            if (pickBtn) pickBtn.disabled = source !== "local";
+            if (localInfo) localInfo.style.opacity = source === "local" ? "1" : "0.65";
+            if (langShell) langShell.style.opacity = source === "off" ? "0.6" : "1";
+            if (langTrigger) {
+                langTrigger.disabled = source === "off";
+                if (source === "off") {
+                    closeVideoExportSubtitleLangShell();
+                }
+            }
+            if (langAllBtn) langAllBtn.disabled = source === "off";
+            if (langNoneBtn) langNoneBtn.disabled = source === "off";
+            const codes = ["CHS", "CHT", "DE", "EN", "ES", "FR", "ID", "IT", "JP", "KR", "PT", "RU", "TH", "TR", "VI"];
+            for (const code of codes) {
+                const box = byId(`video_export_subtitle_lang_${code}`);
+                if (box) box.disabled = source === "off";
+            }
+        }
+
+        function updateVideoExportModeUi() {
+            const mode = String((byId("video_export_mode") && byId("video_export_mode").value) || "container");
+            const limitGroup = byId("video_export_hybrid_group");
+            const showLimit = mode === "hybrid";
+            if (limitGroup) limitGroup.style.display = showLimit ? "" : "none";
+
+            if (mode === "container") {
+                const subSource = byId("video_export_subtitle_source");
+                if (subSource && subSource.value === "off") {
+                    subSource.value = "online";
+                    refreshCustomSelect("video_export_subtitle_source");
+                }
+                updateVideoExportSubtitleSourceUi();
+            }
+        }
+
+        function closeVideoExportSubtitleConvertModal(resetPending = true) {
+            const modal = byId("video_export_subtitle_convert_modal");
+            if (modal) modal.classList.add("hidden");
+            if (resetPending) {
+                pendingVideoExportPayload = null;
+                pendingVideoExportSubtitlePromptInfo = null;
+            }
+        }
+
+        function buildVideoExportPayload() {
+            return {
+                format: byId("video_export_format").value,
+                output_dir: String(byId("video_export_output").value || "").trim(),
+                candidates: videoExportCandidates,
+                selected_channels: videoExportSelectedChannels(),
+                subtitle_source: byId("video_export_subtitle_source") ? byId("video_export_subtitle_source").value : "off",
+                subtitle_languages: videoExportSelectedSubtitleLanguages(),
+                subtitle_local_files: videoExportLocalSubtitleFiles,
+                export_mode: byId("video_export_mode") ? byId("video_export_mode").value : "container",
+                default_subtitle_lang: getPreferredSoftSubtitleLang(),
+                hybrid_hardsub_limit: byId("video_export_hybrid_limit") ? Number(byId("video_export_hybrid_limit").value || 2) : 2,
+                subtitle_convert_mode: "original",
+            };
+        }
+
+        function getVideoExportSubtitlePromptInfo(payload) {
+            if (!payload || payload.subtitle_source === "off") return null;
+            if (payload.subtitle_source === "online") {
+                return payload.subtitle_languages && payload.subtitle_languages.length
+                    ? { source: "online", formats: ["SRT"] }
+                    : null;
+            }
+            if (payload.subtitle_source !== "local") return null;
+            const formats = Array.from(new Set(
+                (videoExportLocalSubtitleFiles || [])
+                    .map((file) => {
+                        const text = String(file || "").trim().toLowerCase();
+                        const idx = text.lastIndexOf(".");
+                        return idx >= 0 ? text.slice(idx + 1).toUpperCase() : "";
+                    })
+                    .filter((ext) => ext === "SRT" || ext === "TXT")
+            ));
+            return formats.length ? { source: "local", formats } : null;
+        }
+
+        function refreshVideoExportSubtitleConvertModalText() {
+            if (!pendingVideoExportSubtitlePromptInfo) return;
+            const dict = t(currentLang());
+            const info = pendingVideoExportSubtitlePromptInfo;
+            const formatsText = (info.formats || []).join(" / ") || "SRT";
+            const message = info.source === "online"
+                ? String(dict.video_export_subtitle_convert_message_online || "Online subtitles are fetched as SRT files. Convert them to ASS before export?")
+                : String(dict.video_export_subtitle_convert_message_local || "Detected local subtitle files in {formats}. Convert them to ASS before export?").replace("{formats}", formatsText);
+            const noteKey = (info.formats || []).includes("TXT")
+                ? "video_export_subtitle_convert_note_txt"
+                : "video_export_subtitle_convert_note";
+            const note = String(dict[noteKey] || "").trim();
+            setText("video_export_subtitle_convert_message", note ? `${message}\n\n${note}` : message);
+        }
+
+        function openVideoExportSubtitleConvertModal(info, payload) {
+            pendingVideoExportPayload = payload;
+            pendingVideoExportSubtitlePromptInfo = info;
+            refreshVideoExportSubtitleConvertModalText();
+            const modal = byId("video_export_subtitle_convert_modal");
+            if (modal) modal.classList.remove("hidden");
+        }
+
+        function runVideoExportPayload(payload) {
+            if (!bridge || !bridge.startVideoExport || videoExportRunning) return;
+            videoExportRunning = true;
+            byId("video_export_start_btn").disabled = true;
+            bridge.startVideoExport(JSON.stringify(payload));
+        }
+
+        function confirmVideoExportSubtitleConversion(mode) {
+            if (!pendingVideoExportPayload) {
+                closeVideoExportSubtitleConvertModal();
+                return;
+            }
+            const payload = pendingVideoExportPayload;
+            payload.subtitle_convert_mode = mode === "ass" ? "ass" : "original";
+            closeVideoExportSubtitleConvertModal(false);
+            pendingVideoExportPayload = null;
+            pendingVideoExportSubtitlePromptInfo = null;
+            runVideoExportPayload(payload);
+        }
+
+        function getPreferredSoftSubtitleLang() {
+            const selected = videoExportSelectedSubtitleLanguages();
+            if (selected.includes("CHS")) return "CHS";
+            if (selected.includes("EN")) return "EN";
+            return selected.length ? selected[0] : "";
+        }
+
+        function updateVideoExportCapabilityUi() {
+            const dict = t(currentLang());
+            const hasAnyAudio = videoExportCandidates.some((item) => {
+                const tracks = Array.isArray(item && item.audio_tracks) ? item.audio_tracks : [];
+                const wavs = Array.isArray(item && item.wavs) ? item.wavs : [];
+                return tracks.length > 0 || wavs.length > 0;
+            });
+
+            const audioShell = byId("video_export_audio_shell");
+            const audioTrigger = byId("video_export_audio_trigger");
+            const allBtn = byId("video_export_audio_all_btn");
+            const noneBtn = byId("video_export_audio_none_btn");
+            if (audioShell) audioShell.style.opacity = hasAnyAudio ? "1" : "0.6";
+            if (audioTrigger) audioTrigger.disabled = !hasAnyAudio;
+            if (allBtn) allBtn.disabled = !hasAnyAudio;
+            if (noneBtn) noneBtn.disabled = !hasAnyAudio;
+            for (let ch = 0; ch < 4; ch++) {
+                const box = byId(`video_export_audio_ch${ch}`);
+                if (box) box.disabled = !hasAnyAudio;
+            }
+            if (!hasAnyAudio) {
+                const summary = byId("video_export_audio_summary");
+                if (summary) summary.textContent = dict.video_export_audio_only_ivf || "Video only";
+            } else {
+                refreshVideoExportAudioSummary();
+            }
+        }
+
+        function formatVideoExportAudioTracks(item, useSelectedOnly = false) {
+            const tracks = Array.isArray(item && item.audio_tracks) ? item.audio_tracks : [];
+            const dict = t(currentLang());
+            if (!tracks.length) return dict.video_export_audio_only_ivf || "IVF only";
+            const selected = new Set(videoExportSelectedChannels());
+            const effectiveTracks = useSelectedOnly
+                ? tracks.filter((track) => {
+                    const rawCh = Number(track && track.ch);
+                    return Number.isInteger(rawCh) && selected.has(rawCh);
+                })
+                : tracks;
+
+            if (useSelectedOnly && !effectiveTracks.length) {
+                return dict.video_export_audio_none || dict.video_export_audio_silent || "Silent video";
+            }
+
+            return effectiveTracks
+                .map((track) => {
+                    const rawCh = Number(track && track.ch);
+                    if (Number.isInteger(rawCh) && rawCh >= 0 && rawCh <= 3) {
+                        const key = `video_export_audio_ch${rawCh}`;
+                        const translated = String(dict[key] || "").trim();
+                        if (translated) return translated;
+                    }
+                    return String((track && track.label) || "").trim();
+                })
+                .filter(Boolean)
+                .join(" / ");
+        }
+
+        function normalizeVideoExportStatusText(statusText) {
+            const raw = String(statusText || "").trim();
+            if (!raw) return "";
+            const langs = ["zh-CN", "zh-TW", "en"];
+            const keys = ["pending", "running", "done", "failed"];
+            for (const lang of langs) {
+                const dict = t(lang);
+                for (const key of keys) {
+                    if (raw === String(dict[`video_export_status_${key}`] || "")) {
+                        return key;
+                    }
+                }
+            }
+            const lowered = raw.toLowerCase();
+            if (lowered.includes("pending")) return "pending";
+            if (lowered.includes("running")) return "running";
+            if (lowered.includes("done")) return "done";
+            if (lowered.includes("failed")) return "failed";
+            return "";
+        }
+
+        function refreshVideoExportRowsLanguage() {
+            if (!Array.isArray(videoExportCandidates) || videoExportCandidates.length <= 0) return;
+            const dict = t(currentLang());
+            for (const item of videoExportCandidates) {
+                const id = String(item && (item.id || item.name || ""));
+                if (!id) continue;
+                const row = byId(`video_export_row_${id}`);
+                if (!row) continue;
+
+                const audioCell = row.children && row.children[2];
+                if (audioCell) {
+                    const audioText = formatVideoExportAudioTracks(item, true);
+                    audioCell.className = "video-export-audio-cell" + (audioText === (dict.video_export_audio_only_ivf || "IVF only") ? "" : " has-audio");
+                    audioCell.removeAttribute("title");
+                    const label = audioCell.querySelector(".audio-track-list");
+                    if (label) label.textContent = audioText;
+                }
+
+                const statusEl = byId(`video_export_status_${id}`);
+                if (statusEl) {
+                    const key = normalizeVideoExportStatusText(statusEl.textContent || "") || "pending";
+                    const next = dict[`video_export_status_${key}`] || statusEl.textContent || "";
+                    statusEl.textContent = next;
+                }
+            }
+        }
+
         function setText(id, text) {
             const el = byId(id);
-            if (el) el.textContent = text;
+            if (!el) return;
+            // Support real newlines for line breaks
+            const hasNewline = text.indexOf(String.fromCharCode(10)) !== -1;
+            if (hasNewline) {
+                el.innerHTML = text.split(String.fromCharCode(10)).map(line => {
+                    return document.createTextNode(line).nodeValue;
+                }).join('<br>');
+                el.style.whiteSpace = 'pre-wrap';
+            } else {
+                el.textContent = text;
+                el.style.whiteSpace = '';
+            }
         }
 
         function setPlaceholder(id, text) {
@@ -2133,6 +3108,11 @@ HTML_TEMPLATE = """<!doctype html>
             el.setAttribute("data-tooltip", text || "");
             el.setAttribute("aria-label", text || "");
             el.removeAttribute("title");
+        }
+
+        function closeAllVideoExportMultiSelects() {
+            closeVideoExportAudioShell();
+            closeVideoExportSubtitleLangShell();
         }
 
         function closeCustomSelects(exceptId = null) {
@@ -2170,6 +3150,9 @@ HTML_TEMPLATE = """<!doctype html>
 
         function refreshAllCustomSelects() {
             customSelectInstances.forEach((_, selectId) => refreshCustomSelect(selectId));
+            refreshVideoExportAudioSummary();
+            refreshVideoExportSubtitleLangSummary();
+            updateVideoExportSubtitleLocalInfo();
         }
 
         function setupCustomSelect(selectId) {
@@ -2212,6 +3195,9 @@ HTML_TEMPLATE = """<!doctype html>
             trigger.addEventListener("click", (event) => {
                 event.preventDefault();
                 const willOpen = !shell.classList.contains("open");
+                if (willOpen) {
+                    closeAllVideoExportMultiSelects();
+                }
                 closeCustomSelects(willOpen ? selectId : null);
             });
 
@@ -2219,7 +3205,101 @@ HTML_TEMPLATE = """<!doctype html>
         }
 
         function setupCustomSelects() {
-            ["lang_select", "theme_select", "video_export_format"].forEach(setupCustomSelect);
+            ["lang_select", "theme_select", "video_export_format", "video_export_subtitle_source", "video_export_mode"].forEach(setupCustomSelect);
+        }
+
+        function setupVideoExportAudioSelect() {
+            const shell = videoExportAudioShell();
+            const trigger = byId("video_export_audio_trigger");
+            if (!shell || !trigger || shell.dataset.bound === "1") return;
+            shell.dataset.bound = "1";
+
+            trigger.addEventListener("click", (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                const willOpen = !shell.classList.contains("open");
+                if (willOpen) {
+                    closeCustomSelects();
+                    closeVideoExportSubtitleLangShell();
+                }
+                toggleVideoExportAudioShell();
+            });
+
+            const allBtn = byId("video_export_audio_all_btn");
+            const noneBtn = byId("video_export_audio_none_btn");
+            if (allBtn) {
+                allBtn.addEventListener("click", (event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setVideoExportAudioAll(true);
+                });
+            }
+            if (noneBtn) {
+                noneBtn.addEventListener("click", (event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setVideoExportAudioAll(false);
+                });
+            }
+
+            for (let ch = 0; ch < 4; ch++) {
+                const checkbox = byId(`video_export_audio_ch${ch}`);
+                if (!checkbox) continue;
+                checkbox.addEventListener("change", () => {
+                    refreshVideoExportAudioSummary();
+                    refreshVideoExportRowsLanguage();
+                });
+            }
+
+            refreshVideoExportAudioSummary();
+        }
+
+        function setupVideoExportSubtitleSelect() {
+            const shell = videoExportSubtitleLangShell();
+            const trigger = byId("video_export_subtitle_lang_trigger");
+            if (!shell || !trigger || shell.dataset.bound === "1") return;
+            shell.dataset.bound = "1";
+
+            trigger.addEventListener("click", (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                const willOpen = !shell.classList.contains("open");
+                if (willOpen) {
+                    closeCustomSelects();
+                    closeVideoExportAudioShell();
+                }
+                toggleVideoExportSubtitleLangShell();
+            });
+
+            const allBtn = byId("video_export_subtitle_lang_all_btn");
+            const noneBtn = byId("video_export_subtitle_lang_none_btn");
+            if (allBtn) {
+                allBtn.addEventListener("click", (event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setVideoExportSubtitleLangAll(true);
+                });
+            }
+            if (noneBtn) {
+                noneBtn.addEventListener("click", (event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setVideoExportSubtitleLangAll(false);
+                });
+            }
+
+            const codes = ["CHS", "CHT", "DE", "EN", "ES", "FR", "ID", "IT", "JP", "KR", "PT", "RU", "TH", "TR", "VI"];
+            for (const code of codes) {
+                const checkbox = byId(`video_export_subtitle_lang_${code}`);
+                if (!checkbox) continue;
+                checkbox.addEventListener("change", () => {
+                    refreshVideoExportSubtitleLangSummary();
+                });
+            }
+
+            refreshVideoExportSubtitleLangSummary();
+            updateVideoExportSubtitleLocalInfo();
+            updateVideoExportSubtitleSourceUi();
         }
 
         function blkEntryCount(value) {
@@ -2295,6 +3375,69 @@ HTML_TEMPLATE = """<!doctype html>
             return new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "medium" }).format(new Date(ts * 1000));
         }
 
+        function displayUsmName(name) {
+            const text = String(name || "").trim();
+            if (!text) return "";
+            return text.replace(/\\.usm$/i, "");
+        }
+
+        function computeRowVideoExt(row) {
+            const explicit = String((row && row.video_ext) || "").trim().toLowerCase();
+            if (explicit) return explicit;
+            const videoPath = String((row && row.video && row.video.path) || "").trim();
+            if (!videoPath) return "";
+            const idx = videoPath.lastIndexOf(".");
+            return idx >= 0 ? videoPath.slice(idx + 1).toLowerCase() : "";
+        }
+
+        function rowAudioTrackCount(row) {
+            const tracks = Array.isArray(row && row.audio_tracks) ? row.audio_tracks : [];
+            if (tracks.length > 0) return tracks.length;
+            const audio = row && row.audio;
+            if (audio && typeof audio === "object") {
+                return Object.keys(audio).length;
+            }
+            return 0;
+        }
+
+        function renderCompatibilitySummary(rows) {
+            const dict = t(currentLang());
+            const el = byId("file_compat_summary");
+            if (!el) return;
+            if (!Array.isArray(rows) || rows.length === 0) {
+                el.textContent = dict.file_compat_summary_empty || "Compatibility: no files loaded.";
+                return;
+            }
+
+            const supported = new Set(["ivf", "264", "h264", "m1v"]);
+            let finished = 0;
+            let exportable = 0;
+            let unsupportedVideo = 0;
+            let noAudio = 0;
+
+            for (const row of rows) {
+                const status = String((row && row.status) || "pending");
+                if (status !== "ok" && status !== "skipped" && status !== "error") continue;
+                finished += 1;
+                if (status === "ok") {
+                    const ext = computeRowVideoExt(row);
+                    if (!ext || !supported.has(ext)) {
+                        unsupportedVideo += 1;
+                    } else {
+                        exportable += 1;
+                    }
+                    if (rowAudioTrackCount(row) <= 0) noAudio += 1;
+                }
+            }
+
+            el.textContent = (dict.file_compat_summary || "Compatibility: finished {finished}/{total}, exportable {exportable}, unsupported video {unsupported}, no-audio {noAudio}.")
+                .replace("{finished}", String(finished))
+                .replace("{total}", String(rows.length))
+                .replace("{exportable}", String(exportable))
+                .replace("{unsupported}", String(unsupportedVideo))
+                .replace("{noAudio}", String(noAudio));
+        }
+
         function renderFileList(rows) {
             const body = byId("file_table_body");
             const emptyOverlay = byId("file_table_empty");
@@ -2315,6 +3458,7 @@ HTML_TEMPLATE = """<!doctype html>
                     emptyOverlay.textContent = dict.table_empty;
                     emptyOverlay.classList.remove("hidden");
                 }
+                renderCompatibilitySummary([]);
                 renderPostProcessButtons();
                 return;
             }
@@ -2338,7 +3482,7 @@ HTML_TEMPLATE = """<!doctype html>
                     {
                         html: `<div class="cell-progress"><div class="mini-track"><div id="${row.id}_progress_fill" class="mini-fill" style="width:${row.progress}%"></div></div><div id="${row.id}_progress_text" class="mini-label">${row.progress}%</div></div>`,
                     },
-                    { text: row.name, title: row.path },
+                    { text: displayUsmName(row.name), title: row.path },
                     { text: formatBytes(row.size_bytes) },
                     { text: formatDate(row.created_ts) },
                     { id: `${row.id}_key1`, text: row.key1_hex_little || "" },
@@ -2369,6 +3513,7 @@ HTML_TEMPLATE = """<!doctype html>
                 updateReportAction(row.id, row.status || "pending");
                 body.appendChild(tr);
             });
+            renderCompatibilitySummary(rows);
             renderPostProcessButtons();
         }
 
@@ -2606,12 +3751,13 @@ HTML_TEMPLATE = """<!doctype html>
             try {
                 payload = JSON.parse(content || "{}");
             } catch (_) {
-                payload = null;
+                console.error("Failed to parse payload JSON:", _); // Added error logging
             }
 
             if (!payload || typeof payload !== "object") {
                 openSyncResultModal(dict.blk_sync_popup_note || "", content || dict.blk_sync_popup_empty || "");
                 return;
+            refreshVideoExportAudioSummary();
             }
 
             const unresolvedCount = Number(payload.unresolved_count || 0);
@@ -2704,6 +3850,7 @@ HTML_TEMPLATE = """<!doctype html>
                 }
             }
             renderPostProcessButtons();
+            renderCompatibilitySummary(Array.from(fileRows.values()));
         }
 
         function _advanceProgress(current, target, dtSec, urgency = 1) {
@@ -2827,9 +3974,12 @@ HTML_TEMPLATE = """<!doctype html>
                 videoExportRows.set(id, { id, progress: 0, status: dict.video_export_status_pending || "Pending" });
                 const tr = document.createElement("tr");
                 tr.id = `video_export_row_${id}`;
+                const audioText = formatVideoExportAudioTracks(item, true);
+                const displayName = displayUsmName(String(item.name || "—"));
                 tr.innerHTML = `
-                    <td title="${String(item.file || item.name || "")}">${String(item.name || "—")}</td>
+                    <td>${escapeHtml(displayName || "—")}</td>
                     <td id="video_export_status_${id}">${dict.video_export_status_pending || "Pending"}</td>
+                    <td class="video-export-audio-cell${audioText === (dict.video_export_audio_only_ivf || "IVF only") ? "" : " has-audio"}"><span class="audio-track-list">${audioText}</span></td>
                     <td>
                         <div class="cell-progress video-export-progress">
                             <div class="mini-track"><div id="video_export_fill_${id}" class="mini-fill" style="width:0%"></div></div>
@@ -2857,19 +4007,34 @@ HTML_TEMPLATE = """<!doctype html>
             const fill = byId(`video_export_fill_${id}`);
             const text = byId(`video_export_text_${id}`);
             const statusEl = byId(`video_export_status_${id}`);
+            const dict = t(currentLang());
             if (fill) fill.style.width = `${value}%`;
             if (text) text.textContent = `${Math.round(value)}%`;
-            if (statusEl && status) statusEl.textContent = String(status);
+            if (statusEl && status) {
+                const normalizedKey = normalizeVideoExportStatusText(status);
+                statusEl.textContent = normalizedKey ? (dict[`video_export_status_${normalizedKey}`] || String(status)) : String(status);
+            }
         }
 
         function openVideoExportModal() {
             renderVideoExportRows();
+            refreshVideoExportAudioSummary();
+            refreshVideoExportSubtitleLangSummary();
+            updateVideoExportSubtitleLocalInfo();
+            updateVideoExportSubtitleSourceUi();
+            updateVideoExportModeUi();
+            updateVideoExportCapabilityUi();
             byId("video_export_modal").classList.remove("hidden");
         }
 
         function closeVideoExportModal() {
             if (videoExportRunning) return;
+            closeVideoExportSubtitleConvertModal();
             byId("video_export_modal").classList.add("hidden");
+        }
+
+        function devReloadStyle() {
+            if (bridge && bridge.reloadStyle) bridge.reloadStyle();
         }
 
         function pickVideoExportOutput() {
@@ -2877,21 +4042,24 @@ HTML_TEMPLATE = """<!doctype html>
             bridge.pickVideoExportOutput();
         }
 
+        function pickVideoExportSubtitles() {
+            if (!bridge || !bridge.pickVideoExportSubtitleFiles) return;
+            bridge.pickVideoExportSubtitleFiles();
+        }
+
         function startVideoExport() {
             if (!bridge || !bridge.startVideoExport || videoExportRunning) return;
-            const out = String(byId("video_export_output").value || "").trim();
-            if (!out) {
+            const payload = buildVideoExportPayload();
+            if (!payload.output_dir) {
                 showCopyToast(t(currentLang()).video_export_output_required || "");
                 return;
             }
-            videoExportRunning = true;
-            byId("video_export_start_btn").disabled = true;
-            const payload = {
-                format: byId("video_export_format").value,
-                output_dir: out,
-                candidates: videoExportCandidates,
-            };
-            bridge.startVideoExport(JSON.stringify(payload));
+            const promptInfo = getVideoExportSubtitlePromptInfo(payload);
+            if (promptInfo) {
+                openVideoExportSubtitleConvertModal(promptInfo, payload);
+                return;
+            }
+            runVideoExportPayload(payload);
         }
 
         function onVideoExportReady(payloadJson) {
@@ -2906,6 +4074,21 @@ HTML_TEMPLATE = """<!doctype html>
             if (byId("video_export_output") && out) {
                 byId("video_export_output").value = out;
             }
+            if (byId("video_export_audio_ch0")) byId("video_export_audio_ch0").checked = true;
+            if (byId("video_export_audio_ch1")) byId("video_export_audio_ch1").checked = true;
+            if (byId("video_export_audio_ch2")) byId("video_export_audio_ch2").checked = true;
+            if (byId("video_export_audio_ch3")) byId("video_export_audio_ch3").checked = true;
+            setVideoExportSubtitleLangAll(true);
+            if (byId("video_export_subtitle_source")) byId("video_export_subtitle_source").value = "online";
+            if (byId("video_export_mode")) byId("video_export_mode").value = "container";
+            if (byId("video_export_hybrid_limit")) byId("video_export_hybrid_limit").value = "2";
+            videoExportLocalSubtitleFiles = [];
+            updateVideoExportSubtitleLocalInfo();
+            updateVideoExportSubtitleSourceUi();
+            updateVideoExportModeUi();
+            refreshVideoExportAudioSummary();
+            refreshVideoExportSubtitleLangSummary();
+            updateVideoExportCapabilityUi();
             renderVideoExportButton();
         }
 
@@ -2945,7 +4128,6 @@ HTML_TEMPLATE = """<!doctype html>
         }
 
         function refreshFileList() {
-            if (!fileRows.size) return;
             renderFileList(Array.from(fileRows.values()));
         }
 
@@ -3020,15 +4202,62 @@ HTML_TEMPLATE = """<!doctype html>
             setText("blk_save_confirm_title", dict.blk_versions_save_confirm_title || dict.blk_versions_title);
             setText("blk_save_confirm_yes_btn", dict.yes);
             setText("blk_save_confirm_no_btn", dict.no);
+            setText("video_export_subtitle_convert_title", dict.video_export_subtitle_convert_title || "Convert subtitles to ASS?");
+            setText("video_export_subtitle_convert_yes_btn", dict.video_export_subtitle_convert_yes || "Convert to ASS");
+            setText("video_export_subtitle_convert_no_btn", dict.video_export_subtitle_convert_no || "Use Original");
+            setText("video_export_subtitle_convert_cancel_btn", dict.settings_cancel || "Cancel");
             setText("blk_save_success_title", dict.blk_versions_saved_title || dict.blk_versions_title);
             setText("blk_save_reveal_btn", dict.blk_versions_saved_reveal || dict.browse);
             setText("blk_save_success_ok_btn", dict.settings_ok || "OK");
             setText("video_export_title", dict.video_export_title || "Export Video");
             setText("video_export_format_label", dict.video_export_format_label || "Format");
+            setText("video_export_mode_label", dict.video_export_mode_label || "Export Strategy");
+            setText("video_export_hybrid_limit_label", dict.video_export_hybrid_limit_label || "Hybrid hard-sub count");
             setText("video_export_output_label", dict.video_export_output_label || "Output");
             setText("video_export_output_pick_btn", dict.browse || "Browse");
+            setText("video_export_audio_label", dict.video_export_audio || "Audio");
+            setText("video_export_audio_all_btn", dict.video_export_audio_all || "All");
+            setText("video_export_audio_none_btn", dict.video_export_audio_none || "None");
+            setText("video_export_audio_ch0_label", dict.video_export_audio_ch0 || "Chinese");
+            setText("video_export_audio_ch1_label", dict.video_export_audio_ch1 || "English");
+            setText("video_export_audio_ch2_label", dict.video_export_audio_ch2 || "Japanese");
+            setText("video_export_audio_ch3_label", dict.video_export_audio_ch3 || "Korean");
+            setText("video_export_subtitle_source_label", dict.video_export_subtitle_source || "Subtitles");
+            setText("video_export_subtitle_local_label", dict.video_export_subtitle_local || "Local");
+            setText("video_export_subtitle_pick_btn", dict.video_export_subtitle_pick || "Pick");
+            setText("video_export_subtitle_lang_label", dict.video_export_subtitle_languages || "Languages");
+            setText("video_export_subtitle_lang_all_btn", dict.video_export_subtitle_lang_all || "All");
+            setText("video_export_subtitle_lang_none_btn", dict.video_export_subtitle_lang_none || "None");
+            const subtitleSource = byId("video_export_subtitle_source");
+            if (subtitleSource && subtitleSource.options.length >= 3) {
+                subtitleSource.options[0].text = dict.video_export_subtitle_source_off || "Off";
+                subtitleSource.options[1].text = dict.video_export_subtitle_source_local || "Local Files";
+                subtitleSource.options[2].text = dict.video_export_subtitle_source_online || "Online";
+            }
+            const exportMode = byId("video_export_mode");
+            if (exportMode && exportMode.options.length >= 3) {
+                exportMode.options[0].text = dict.video_export_mode_container || "Container (multi audio + multi subtitles)";
+                exportMode.options[1].text = dict.video_export_mode_burn || "Hard Subtitle (multiple files)";
+                exportMode.options[2].text = dict.video_export_mode_hybrid || "Hybrid (container + hard subtitle)";
+            }
+            setText("video_export_subtitle_lang_CHS_label", dict.video_export_subtitle_lang_name_CHS || "Simplified Chinese");
+            setText("video_export_subtitle_lang_CHT_label", dict.video_export_subtitle_lang_name_CHT || "Traditional Chinese");
+            setText("video_export_subtitle_lang_DE_label", dict.video_export_subtitle_lang_name_DE || "German");
+            setText("video_export_subtitle_lang_EN_label", dict.video_export_subtitle_lang_name_EN || "English");
+            setText("video_export_subtitle_lang_ES_label", dict.video_export_subtitle_lang_name_ES || "Spanish");
+            setText("video_export_subtitle_lang_FR_label", dict.video_export_subtitle_lang_name_FR || "French");
+            setText("video_export_subtitle_lang_ID_label", dict.video_export_subtitle_lang_name_ID || "Indonesian");
+            setText("video_export_subtitle_lang_IT_label", dict.video_export_subtitle_lang_name_IT || "Italian");
+            setText("video_export_subtitle_lang_JP_label", dict.video_export_subtitle_lang_name_JP || "Japanese");
+            setText("video_export_subtitle_lang_KR_label", dict.video_export_subtitle_lang_name_KR || "Korean");
+            setText("video_export_subtitle_lang_PT_label", dict.video_export_subtitle_lang_name_PT || "Portuguese");
+            setText("video_export_subtitle_lang_RU_label", dict.video_export_subtitle_lang_name_RU || "Russian");
+            setText("video_export_subtitle_lang_TH_label", dict.video_export_subtitle_lang_name_TH || "Thai");
+            setText("video_export_subtitle_lang_TR_label", dict.video_export_subtitle_lang_name_TR || "Turkish");
+            setText("video_export_subtitle_lang_VI_label", dict.video_export_subtitle_lang_name_VI || "Vietnamese");
             setText("video_export_th_name", dict.table_name || "Name");
             setText("video_export_th_status", dict.video_export_status || "Status");
+            setText("video_export_th_audio", dict.video_export_audio || "Audio");
             setText("video_export_th_progress", dict.table_progress || "Progress");
             setText("video_export_overall_label", dict.overall_progress || "Overall progress");
             setText("video_export_start_btn", dict.video_export_start || "Start Export");
@@ -3048,6 +4277,10 @@ HTML_TEMPLATE = """<!doctype html>
             setTooltip("report_pick_btn", dict.btn_report_pick_tooltip);
             setTooltip("blk_pick_btn", dict.btn_blk_pick_tooltip);
             setTooltip("open_versions_btn", dict.btn_view_versions_tooltip);
+            setTooltip("video_export_output_pick_btn", dict.browse || "Browse");
+            setTooltip("video_export_subtitle_pick_btn", dict.video_export_subtitle_pick_tooltip || dict.video_export_subtitle_pick || "Pick");
+            setTooltip("video_export_start_btn", dict.video_export_start_tooltip || dict.video_export_start || "Start Export");
+            setTooltip("video_export_close_btn", dict.video_export_close_tooltip || dict.close || "Close");
             setText("settings_title", dict.settings_title);
             setText("settings_ok_btn", dict.settings_ok);
             setText("settings_cancel_btn", dict.settings_cancel);
@@ -3085,6 +4318,9 @@ HTML_TEMPLATE = """<!doctype html>
             }
             refreshContextMenuLanguage();
             refreshAllCustomSelects();
+            updateVideoExportModeUi();
+            refreshVideoExportSubtitleConvertModalText();
+            refreshVideoExportRowsLanguage();
             refreshFileList();
             syncInputMode(true);
             syncRules();
@@ -3243,6 +4479,17 @@ HTML_TEMPLATE = """<!doctype html>
                 }
             } else if (el) {
                 el.value = value;
+            }
+            if (field === "video_export_subtitles") {
+                try {
+                    const parsed = JSON.parse(String(value || "[]"));
+                    videoExportLocalSubtitleFiles = Array.isArray(parsed)
+                        ? parsed.map((x) => String(x || "").trim()).filter(Boolean)
+                        : [];
+                } catch (_) {
+                    videoExportLocalSubtitleFiles = [];
+                }
+                updateVideoExportSubtitleLocalInfo();
             }
             if (field === "input") {
                 previewInput();
@@ -3546,9 +4793,32 @@ HTML_TEMPLATE = """<!doctype html>
             return byId("mode_batch").checked ? "batch" : "single";
         }
 
+        function updateInputModeToggleUi() {
+            const shell = byId("mode_switch");
+            const mode = getInputMode();
+            if (shell) shell.setAttribute("data-mode", mode);
+            const btn = byId("mode_toggle_btn");
+            if (btn) {
+                const dict = t(currentLang());
+                const singleText = byId("single_file_text") ? byId("single_file_text").textContent : (dict.single_file || "File selection");
+                const batchText = byId("batch_folder_text") ? byId("batch_folder_text").textContent : (dict.batch_folder || "Folder selection");
+                const active = mode === "batch" ? batchText : singleText;
+                btn.setAttribute("aria-label", `${dict.analysis_mode || "Mode"}: ${active}`);
+                btn.removeAttribute("title");
+            }
+        }
+
+        function toggleInputMode() {
+            const nextMode = getInputMode() === "batch" ? "single" : "batch";
+            byId("mode_batch").checked = nextMode === "batch";
+            byId("mode_single").checked = nextMode === "single";
+            syncInputMode();
+        }
+
         function syncInputMode(preserveState = false) {
             const mode = getInputMode();
             const dict = t(currentLang());
+            updateInputModeToggleUi();
             byId("input_label").textContent = mode === "batch" ? dict.input_usm_folder : dict.input_usm_file;
             byId("input_pick_btn").textContent = mode === "batch" ? dict.pick : dict.browse;
             byId("input").placeholder = mode === "batch" ? dict.placeholder_input_folder : dict.placeholder_input_file;
@@ -3685,6 +4955,8 @@ HTML_TEMPLATE = """<!doctype html>
             window.__usmBridgeBound = true;
             bridge = channel.objects.bridge;
             setupCustomSelects();
+            setupVideoExportAudioSelect();
+            setupVideoExportSubtitleSelect();
             bridge.logMessage.connect(appendLog);
             bridge.uiToast.connect(showCopyToast);
             bridge.syncResultReady.connect(onSyncResultReady);
@@ -3701,6 +4973,10 @@ HTML_TEMPLATE = """<!doctype html>
             bridge.fileProgressUpdate.connect(updateFileProgress);
             bridge.overallProgressUpdate.connect(updateOverallProgress);
             bridge.blkVersionsReady.connect(setBlkVersions);
+            bridge.styleRefreshed.connect(function(css) {
+                const el = document.querySelector("style");
+                if (el) el.textContent = css;
+            });
             try {
                 const storedTheme = localStorage.getItem("usmdiviner_theme") || "dark";
                 applyTheme(storedTheme);
@@ -3714,16 +4990,20 @@ HTML_TEMPLATE = """<!doctype html>
 
         document.addEventListener("click", (event) => {
             const target = event.target;
-            if (target instanceof Element && target.closest(".select-shell")) {
+            if (target instanceof Element && (target.closest(".select-shell") || target.closest(".multi-select-shell"))) {
                 return;
             }
             closeCustomSelects();
+            closeVideoExportAudioShell();
+            closeVideoExportSubtitleLangShell();
         });
 
 
         document.addEventListener("keydown", (event) => {
             if (event.key === "Escape") {
                 closeCustomSelects();
+                closeVideoExportAudioShell();
+                closeVideoExportSubtitleLangShell();
                 hideContextMenu();
             }
         });
@@ -3866,6 +5146,7 @@ class WebBridge(QObject):
     fileRowUpdate = Signal(str)
     fileProgressUpdate = Signal(str)
     overallProgressUpdate = Signal(str)
+    styleRefreshed = Signal(str)
 
     def __init__(self) -> None:
         super().__init__()
@@ -3890,6 +5171,15 @@ class WebBridge(QObject):
 
     def _t(self, key: str, **kwargs) -> str:
         return _t(self._get_language(), key, **kwargs)
+
+    @Slot()
+    def reloadStyle(self) -> None:
+        """Extract the CSS block and emit it so the page can hot-swap the style tag."""
+        import re as _re
+        html = _render_html()
+        m = _re.search(r'<style[^>]*>(.*?)</style>', html, _re.DOTALL)
+        if m:
+            self.styleRefreshed.emit(m.group(1))
 
     @Slot(str)
     def setLanguage(self, language: str) -> None:
@@ -4937,6 +6227,17 @@ class WebBridge(QObject):
         if picked_dir:
             self.fieldChosen.emit("video_export_output", picked_dir)
 
+    @Slot()
+    def pickVideoExportSubtitleFiles(self) -> None:
+        files, _ = QFileDialog.getOpenFileNames(
+            None,
+            self._t("select_video_export_subtitle_files"),
+            "",
+            "Subtitle Files (*.srt *.ass *.txt);;All files (*.*)",
+        )
+        if files:
+            self.fieldChosen.emit("video_export_subtitles", json.dumps(files, ensure_ascii=False))
+
     @Slot(str)
     def startVideoExport(self, payload_json: str) -> None:
         if self._video_export_worker and self._video_export_worker.is_alive():
@@ -4964,6 +6265,45 @@ class WebBridge(QObject):
         output_dir = Path(output_text)
 
         candidates = payload.get("candidates") if isinstance(payload.get("candidates"), list) else []
+        subtitle_source = str(payload.get("subtitle_source") or "off").strip().lower()
+        if subtitle_source not in {"off", "local", "online"}:
+            subtitle_source = "off"
+        subtitle_languages_raw = payload.get("subtitle_languages") if isinstance(payload.get("subtitle_languages"), list) else []
+        subtitle_languages: list[str] = []
+        for item in subtitle_languages_raw:
+            code = str(item or "").strip().upper()
+            if code in SUBTITLE_LANG_CODES and code not in subtitle_languages:
+                subtitle_languages.append(code)
+        subtitle_local_files = [
+            str(item).strip()
+            for item in (payload.get("subtitle_local_files") if isinstance(payload.get("subtitle_local_files"), list) else [])
+            if str(item).strip()
+        ]
+        subtitle_convert_mode = str(payload.get("subtitle_convert_mode") or "original").strip().lower()
+        if subtitle_convert_mode not in {"original", "ass"}:
+            subtitle_convert_mode = "original"
+        export_mode = str(payload.get("export_mode") or "container").strip().lower()
+        if export_mode not in {"container", "burn", "hybrid"}:
+            export_mode = "container"
+        default_subtitle_lang = str(payload.get("default_subtitle_lang") or "").strip().upper()
+        if default_subtitle_lang and default_subtitle_lang not in SUBTITLE_LANG_CODES:
+            default_subtitle_lang = ""
+        try:
+            hybrid_hardsub_limit = int(payload.get("hybrid_hardsub_limit") or 2)
+        except (TypeError, ValueError):
+            hybrid_hardsub_limit = 2
+        hybrid_hardsub_limit = max(0, min(8, hybrid_hardsub_limit))
+        selected_channels_raw = payload.get("selected_channels") if isinstance(payload.get("selected_channels"), list) else None
+        selected_channels: list[int] | None = None
+        if selected_channels_raw is not None:
+            selected_channels = []
+            for item in selected_channels_raw:
+                try:
+                    ch = int(item)
+                except (TypeError, ValueError):
+                    continue
+                if 0 <= ch <= 3 and ch not in selected_channels:
+                    selected_channels.append(ch)
         ffmpeg = find_ffmpeg(None)
         if not ffmpeg:
             self.videoExportFinished.emit(
@@ -4980,70 +6320,381 @@ class WebBridge(QObject):
             return
 
         self._video_export_worker = threading.Thread(
-            target=self._run_video_export,
-            args=(fmt, output_dir, candidates, ffmpeg),
+            target=self._run_video_export_safe,
+            args=(
+                fmt,
+                output_dir,
+                candidates,
+                selected_channels,
+                subtitle_source,
+                subtitle_languages,
+                subtitle_local_files,
+                subtitle_convert_mode,
+                export_mode,
+                default_subtitle_lang,
+                hybrid_hardsub_limit,
+                ffmpeg,
+            ),
             daemon=True,
         )
         self._video_export_worker.start()
 
-    def _run_video_export(self, fmt: str, output_dir: Path, candidates: list[Any], ffmpeg: str) -> None:
+    def _run_video_export_safe(
+        self,
+        fmt: str,
+        output_dir: Path,
+        candidates: list[Any],
+        selected_channels: list[int] | None,
+        subtitle_source: str,
+        subtitle_languages: list[str],
+        subtitle_local_files: list[str],
+        subtitle_convert_mode: str,
+        export_mode: str,
+        default_subtitle_lang: str,
+        hybrid_hardsub_limit: int,
+        ffmpeg: str,
+    ) -> None:
+        try:
+            self._run_video_export(
+                fmt,
+                output_dir,
+                candidates,
+                selected_channels,
+                subtitle_source,
+                subtitle_languages,
+                subtitle_local_files,
+                subtitle_convert_mode,
+                export_mode,
+                default_subtitle_lang,
+                hybrid_hardsub_limit,
+                ffmpeg,
+            )
+        except Exception as exc:
+            logger.exception("video export worker crashed")
+            self.videoExportFinished.emit(
+                json.dumps(
+                    {
+                        "title": self._t("video_export_result_title"),
+                        "message": f"{self._t('video_export_failed')}\n{exc}",
+                        "path": str(output_dir),
+                        "can_reveal": self._can_reveal_saved_path(),
+                    },
+                    ensure_ascii=False,
+                )
+            )
+
+    @staticmethod
+    def _split_local_subtitle_stem(stem: str) -> tuple[str, str]:
+        for sep in (".", "_", "-"):
+            if sep not in stem:
+                continue
+            prefix, suffix = stem.rsplit(sep, 1)
+            code = suffix.upper()
+            if prefix and code in SUBTITLE_LANG_CODES:
+                return prefix, code
+        return stem, ""
+
+    def _collect_local_subtitles_for_video(
+        self,
+        subtitle_local_files: list[str],
+        video_stem: str,
+        subtitle_languages: list[str],
+    ) -> list[tuple[Path, str]]:
+        requested = set(subtitle_languages)
+        resolved: list[tuple[Path, str]] = []
+        neutral: list[Path] = []
+
+        for text in subtitle_local_files:
+            path = Path(text)
+            if not path.exists() or not path.is_file():
+                continue
+            if path.suffix.lower() not in {".srt", ".ass", ".txt"}:
+                continue
+            key, lang = self._split_local_subtitle_stem(path.stem)
+            if key != video_stem:
+                continue
+            if lang:
+                if lang in requested:
+                    resolved.append((path, lang))
+            else:
+                neutral.append(path)
+
+        if neutral:
+            # Keep neutral subtitles as a fallback when filename has no language suffix.
+            resolved.extend((path, "") for path in neutral)
+
+        dedup: list[tuple[Path, str]] = []
+        seen: set[str] = set()
+        for path, lang in resolved:
+            key = f"{path.resolve()}::{lang}"
+            if key in seen:
+                continue
+            seen.add(key)
+            dedup.append((path, lang))
+        return dedup
+
+    def _download_online_subtitle(self, cache_dir: Path, video_stem: str, lang: str) -> Path | None:
+        safe_name = urllib.parse.quote(video_stem, safe="")
+        url = ONLINE_SUBTITLE_RAW_URL.format(lang=lang, name=safe_name)
+        target = cache_dir / f"{video_stem}.{lang}.srt"
+        if target.exists() and target.stat().st_size > 0:
+            return target
+
+        req = urllib.request.Request(url, headers={"User-Agent": "UsmDiviner/1.0"})
+        try:
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                if getattr(resp, "status", 200) >= 400:
+                    return None
+                data = resp.read()
+        except (urllib.error.URLError, TimeoutError, OSError):
+            return None
+
+        if not data:
+            return None
+
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            target.write_bytes(data)
+        except OSError:
+            return None
+        return target
+
+    def _probe_online_subtitle_availability(
+        self,
+        cache_dir: Path,
+        candidates: list[Any],
+        subtitle_languages: list[str],
+    ) -> bool:
+        if not candidates or not subtitle_languages:
+            return False
+        probe_langs = subtitle_languages[:2]
+        probe_candidates = candidates[:3]
+        for item in probe_candidates:
+            name = str((item or {}).get("name") or "")
+            ivf_text = str((item or {}).get("ivf") or "")
+            stem = Path(name).stem or Path(ivf_text).stem
+            if not stem:
+                continue
+            for lang in probe_langs:
+                if self._download_online_subtitle(cache_dir, stem, lang):
+                    return True
+        return False
+
+    def _run_video_export(
+        self,
+        fmt: str,
+        output_dir: Path,
+        candidates: list[Any],
+        selected_channels: list[int] | None,
+        subtitle_source: str,
+        subtitle_languages: list[str],
+        subtitle_local_files: list[str],
+        subtitle_convert_mode: str,
+        export_mode: str,
+        default_subtitle_lang: str,
+        hybrid_hardsub_limit: int,
+        ffmpeg: str,
+    ) -> None:
         output_dir.mkdir(parents=True, exist_ok=True)
         total = max(1, len(candidates))
         done = 0
         success = 0
         failed = 0
+        subtitle_miss_count = 0
+        subtitle_included_count = 0
+        subtitle_auto_fallback = False
+        mode_auto_downgraded = False
+        effective_export_mode = export_mode
+        batch_force_no_subtitles = False
 
-        for item in candidates:
-            row_id = str((item or {}).get("id") or "")
-            name = str((item or {}).get("name") or row_id or "video")
-            ivf = Path(str((item or {}).get("ivf") or ""))
-            wavs = [Path(str(p)) for p in ((item or {}).get("wavs") or []) if str(p or "").strip()]
-            self.videoExportProgress.emit(
-                json.dumps(
-                    {
-                        "id": row_id,
-                        "progress": 10,
-                        "status": self._t("video_export_status_running"),
-                        "done": done,
-                        "total": total,
-                    },
-                    ensure_ascii=False,
-                )
-            )
+        with tempfile.TemporaryDirectory(prefix="usmdiviner_subtitles_") as tmp:
+            subtitle_cache_dir = Path(tmp)
+            effective_subtitle_source = subtitle_source
 
-            ok = False
-            if ivf.exists() and ivf.is_file():
+            if subtitle_source == "online" and subtitle_languages:
+                if not self._probe_online_subtitle_availability(subtitle_cache_dir, candidates, subtitle_languages):
+                    effective_subtitle_source = "off"
+                    batch_force_no_subtitles = True
+                    subtitle_auto_fallback = True
+                    self.logMessage.emit(self._t("video_export_subtitle_online_unstable"))
+                    if export_mode == "burn":
+                        effective_export_mode = "container"
+                        mode_auto_downgraded = True
+                        self.logMessage.emit("[INFO] Video export mode downgraded: burn -> container (no online subtitles available)")
+
+            for item in candidates:
+                row_id = str((item or {}).get("id") or "")
+                name = str((item or {}).get("name") or row_id or "video")
+                ivf = Path(str((item or {}).get("ivf") or ""))
                 stem = Path(name).stem if name else ivf.stem
-                if fmt == "mkv":
-                    out = output_dir / f"{stem}.mkv"
-                    ok, _ = mux_to_mkv(ffmpeg, ivf, wavs, out)
+                audio_tracks = [track for track in ((item or {}).get("audio_tracks") or []) if isinstance(track, dict)]
+                wavs = [Path(str(p)) for p in ((item or {}).get("wavs") or []) if str(p or "").strip()]
+                audio_inputs: list[Path] = []
+                if selected_channels is None:
+                    if audio_tracks:
+                        for track in audio_tracks:
+                            wav_text = str(track.get("wav") or "").strip()
+                            if wav_text:
+                                audio_inputs.append(Path(wav_text))
+                    else:
+                        audio_inputs = wavs
                 else:
-                    out = output_dir / f"{stem}.mp4"
-                    ok, _ = transcode_ivf_to_mp4(ffmpeg, ivf, wavs, out)
+                    selected_set = set(selected_channels)
+                    if audio_tracks:
+                        for track in audio_tracks:
+                            try:
+                                ch = int(track.get("ch"))
+                            except (TypeError, ValueError):
+                                continue
+                            if ch not in selected_set:
+                                continue
+                            wav_text = str(track.get("wav") or "").strip()
+                            if wav_text:
+                                audio_inputs.append(Path(wav_text))
 
-            done += 1
-            if ok:
-                success += 1
-            else:
-                failed += 1
-            self.videoExportProgress.emit(
-                json.dumps(
-                    {
-                        "id": row_id,
-                        "progress": 100,
-                        "status": self._t("video_export_status_done") if ok else self._t("video_export_status_failed"),
-                        "done": done,
-                        "total": total,
-                    },
-                    ensure_ascii=False,
+                subtitle_inputs: list[tuple[Path, str]] = []
+                # Row-level reset: each file recomputes subtitle hit state.
+                row_force_no_subtitles = batch_force_no_subtitles
+                if not row_force_no_subtitles:
+                    if effective_subtitle_source == "local":
+                        subtitle_inputs = self._collect_local_subtitles_for_video(
+                            subtitle_local_files,
+                            stem,
+                            subtitle_languages,
+                        )
+                    elif effective_subtitle_source == "online" and subtitle_languages:
+                        for lang in subtitle_languages:
+                            sub_path = self._download_online_subtitle(subtitle_cache_dir, stem, lang)
+                            if sub_path:
+                                subtitle_inputs.append((sub_path, lang))
+
+                subtitle_hit = bool(subtitle_inputs)
+
+                if effective_subtitle_source in {"local", "online"}:
+                    if subtitle_inputs:
+                        subtitle_included_count += len(subtitle_inputs)
+                    else:
+                        subtitle_miss_count += 1
+
+                self.videoExportProgress.emit(
+                    json.dumps(
+                        {
+                            "id": row_id,
+                            "progress": 10,
+                            "status": self._t("video_export_status_running"),
+                            "done": done,
+                            "total": total,
+                        },
+                        ensure_ascii=False,
+                    )
                 )
+
+                ok = False
+                if ivf.exists() and ivf.is_file():
+                    ext = ".mkv" if fmt == "mkv" else ".mp4"
+
+                    def _export_one(path: Path, subs: list[tuple[Path, str]], mode: str) -> bool:
+                        if fmt == "mkv":
+                            if mode == "container":
+                                done_ok, _ = mux_to_mkv_soft(
+                                    ffmpeg,
+                                    ivf,
+                                    audio_inputs,
+                                    subs,
+                                    path,
+                                    default_sub_lang=default_subtitle_lang,
+                                    convert_subtitles_to_ass=subtitle_convert_mode == "ass",
+                                )
+                                return done_ok
+                            done_ok, _ = mux_to_mkv(ffmpeg, ivf, audio_inputs, subs, path, convert_subtitles_to_ass=subtitle_convert_mode == "ass")
+                            return done_ok
+                        if mode == "container":
+                            done_ok, _ = transcode_ivf_to_mp4_soft(
+                                ffmpeg,
+                                ivf,
+                                audio_inputs,
+                                subs,
+                                path,
+                                default_sub_lang=default_subtitle_lang,
+                                convert_subtitles_to_ass=subtitle_convert_mode == "ass",
+                            )
+                            return done_ok
+                        done_ok, _ = transcode_ivf_to_mp4(ffmpeg, ivf, audio_inputs, subs, path, convert_subtitles_to_ass=subtitle_convert_mode == "ass")
+                        return done_ok
+
+                    row_export_mode = effective_export_mode
+                    # Flag-driven export flow:
+                    # - subtitle_hit=True  -> run with subtitle inputs
+                    # - subtitle_hit=False -> run no-subtitle command path
+                    # Burn mode without subtitles is downgraded to container for reliability.
+                    if row_export_mode == "burn" and not subtitle_hit:
+                        row_export_mode = "container"
+                        mode_auto_downgraded = True
+                        self.logMessage.emit(f"[INFO] [{name}] burn mode downgraded to container (subtitle miss)")
+
+                    if row_export_mode == "container":
+                        out = output_dir / f"{stem}{ext}"
+                        ok = _export_one(out, subtitle_inputs, "container")
+                    elif row_export_mode == "burn":
+                        if subtitle_inputs:
+                            ok = True
+                            for sub_path, lang in subtitle_inputs:
+                                suffix = f"_{lang}" if lang else "_SUB"
+                                out = output_dir / f"{stem}{suffix}{ext}"
+                                one_ok = _export_one(out, [(sub_path, lang)], "burn")
+                                ok = ok and one_ok
+                        else:
+                            out = output_dir / f"{stem}{ext}"
+                            ok = _export_one(out, [], "container")
+                    else:
+                        base_out = output_dir / f"{stem}{ext}"
+                        ok_container = _export_one(base_out, subtitle_inputs, "container")
+                        ok = ok_container
+                        if subtitle_inputs and hybrid_hardsub_limit > 0:
+                            picked = subtitle_inputs[:hybrid_hardsub_limit]
+                            for sub_path, lang in picked:
+                                suffix = f"_{lang}" if lang else "_SUB"
+                                out = output_dir / f"{stem}{suffix}{ext}"
+                                one_ok = _export_one(out, [(sub_path, lang)], "burn")
+                                ok = ok and one_ok
+
+                done += 1
+                if ok:
+                    success += 1
+                else:
+                    failed += 1
+                self.videoExportProgress.emit(
+                    json.dumps(
+                        {
+                            "id": row_id,
+                            "progress": 100,
+                            "status": self._t("video_export_status_done") if ok else self._t("video_export_status_failed"),
+                            "done": done,
+                            "total": total,
+                        },
+                        ensure_ascii=False,
+                    )
+                )
+
+        subtitle_note = ""
+        if effective_subtitle_source in {"local", "online"}:
+            subtitle_note = self._t(
+                "video_export_subtitle_summary",
+                added=subtitle_included_count,
+                missing=subtitle_miss_count,
             )
+        mode_for_summary = "container" if (mode_auto_downgraded and export_mode == "burn") else effective_export_mode
+        mode_note = self._t("video_export_mode_summary", mode=self._t(f"video_export_mode_{mode_for_summary}"))
+        if subtitle_auto_fallback:
+            subtitle_note = (f"{subtitle_note}\n{self._t('video_export_subtitle_online_unstable')}" if subtitle_note else self._t("video_export_subtitle_online_unstable")).strip()
 
         self.videoExportFinished.emit(
             json.dumps(
                 {
                     "title": self._t("video_export_result_title"),
-                    "message": self._t("video_export_done", ok=success, failed=failed),
+                    "message": (
+                        f"{self._t('video_export_done', ok=success, failed=failed)}\n{mode_note}\n{subtitle_note}".strip()
+                    ),
                     "path": str(output_dir),
                     "can_reveal": self._can_reveal_saved_path(),
                 },
@@ -5059,41 +6710,63 @@ class WebBridge(QObject):
         ok_reports = reports
 
         candidates: list[dict[str, Any]] = []
-        all_have_ivf = True
+        supported_video_exts = {".ivf", ".264", ".h264", ".m1v"}
+        all_have_supported_video = True
         default_parent = ""
         for report in ok_reports:
             video = report.get("video") or {}
-            ivf_text = str(video.get("path") or "").strip()
-            ivf = Path(ivf_text) if ivf_text else None
-            if not ivf or not ivf.exists() or ivf.suffix.lower() != ".ivf":
-                all_have_ivf = False
+            video_text = str(video.get("path") or "").strip()
+            video_path = Path(video_text) if video_text else None
+            if (
+                not video_path
+                or not video_path.exists()
+                or video_path.suffix.lower() not in supported_video_exts
+            ):
+                all_have_supported_video = False
                 continue
             if not default_parent:
-                default_parent = str(ivf.parent)
+                default_parent = str(video_path.parent)
 
-            wavs: list[str] = []
             audio = report.get("audio") or {}
+            audio_tracks: list[dict[str, Any]] = []
+            wavs: list[str] = []
             if isinstance(audio, dict):
-                for item in audio.values():
+                for ch_text, item in sorted(
+                    audio.items(),
+                    key=lambda pair: (0, int(pair[0])) if str(pair[0]).isdigit() else (1, str(pair[0])),
+                ):
                     info = item if isinstance(item, dict) else {}
                     decode = info.get("decode") if isinstance(info.get("decode"), dict) else {}
                     wav_text = str(decode.get("wav") or "").strip()
                     if wav_text and Path(wav_text).exists():
                         wavs.append(wav_text)
+                        try:
+                            ch = int(ch_text)
+                        except (TypeError, ValueError):
+                            continue
+                        audio_tracks.append(
+                            {
+                                "ch": ch,
+                                "wav": wav_text,
+                                "label": self._t(f"video_export_audio_ch{ch}"),
+                            }
+                        )
 
-            file_name = Path(str(report.get("file") or ivf.name)).name
+            file_name = Path(str(report.get("file") or video_path.name)).name
             row_id = str(report.get("id") or "")
             candidates.append(
                 {
                     "id": row_id,
                     "name": file_name,
                     "file": str(report.get("file") or ""),
-                    "ivf": str(ivf),
+                    "ivf": str(video_path),
+                    "video_ext": video_path.suffix.lower().lstrip("."),
+                    "audio_tracks": audio_tracks,
                     "wavs": wavs,
                 }
             )
 
-        if not all_have_ivf or len(candidates) != len(ok_reports):
+        if not all_have_supported_video or len(candidates) != len(ok_reports):
             return [], ""
         return candidates, default_parent
 
@@ -5619,6 +7292,7 @@ def main() -> int:
     html = _render_html()
     # Use local workspace root as base URL so relative asset paths can be loaded.
     base_dir = ASSETS_DIR.parent.resolve()
-    view.setHtml(html, QUrl.fromLocalFile(str(base_dir) + os.sep))
+    base_url = QUrl.fromLocalFile(str(base_dir) + os.sep)
+    view.setHtml(html, base_url)
     view.show()
     return app.exec()
