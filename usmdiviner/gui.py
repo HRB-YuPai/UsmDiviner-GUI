@@ -64,6 +64,10 @@ SYNC_TEMPLATE_CANDIDATES = (
     Path.cwd() / "versions_reference.json",
     Path.cwd() / "versions_template.json",
 )
+USM_KEY_INCREMENT_CANDIDATES = (
+    Path.cwd() / "usm_key_increment.json",
+    ASSETS_DIR / "usm_template" / "usm_key_increment.json",
+)
 
 
 def _load_translations() -> dict[str, dict[str, str]]:
@@ -6555,6 +6559,113 @@ class WebBridge(QObject):
             return payload, str(template_path)
         return None, None
 
+    def _read_usm_key_increment_map(self, path: Path) -> dict[str, int]:
+        if not path.exists() or not path.is_file():
+            return {}
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+
+        raw_map: dict[str, Any] = {}
+        if isinstance(payload, dict):
+            keys_payload = payload.get("keys")
+            if isinstance(keys_payload, dict):
+                raw_map = keys_payload
+            else:
+                # Backward-compatible plain mapping support.
+                raw_map = payload
+
+        parsed: dict[str, int] = {}
+        for raw_name, raw_key in raw_map.items():
+            norm = self._norm_video_name(str(raw_name or ""))
+            key_val = self._parse_sync_key(raw_key)
+            if norm and key_val is not None:
+                parsed[norm] = key_val
+        return parsed
+
+    def _write_usm_key_increment_map(self, path: Path, mapping: dict[str, int]) -> None:
+        payload = {
+            "format": "usm_key_increment_v1",
+            "updated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "keys": {name: mapping[name] for name in sorted(mapping)},
+        }
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _load_incremental_key_map(self) -> tuple[dict[str, int], str | None]:
+        for candidate in USM_KEY_INCREMENT_CANDIDATES:
+            parsed = self._read_usm_key_increment_map(candidate)
+            if parsed:
+                return parsed, str(candidate)
+        return {}, None
+
+    def _resolve_increment_target_path(self) -> Path | None:
+        for candidate in USM_KEY_INCREMENT_CANDIDATES:
+            try:
+                candidate.parent.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                continue
+            if candidate.exists() and not candidate.is_file():
+                continue
+            return candidate
+        return None
+
+    def _collect_increment_names_from_report(self, report: dict[str, Any]) -> set[str]:
+        names: set[str] = set()
+
+        file_text = str(report.get("file") or "").strip()
+        if file_text:
+            file_path = Path(file_text)
+            names.add(self._norm_video_name(file_path.name))
+            names.add(self._norm_video_name(file_path.stem))
+
+        video = report.get("video") or {}
+        if isinstance(video, dict):
+            video_text = str(video.get("path") or "").strip()
+            if video_text:
+                video_path = Path(video_text)
+                names.add(self._norm_video_name(video_path.name))
+                names.add(self._norm_video_name(video_path.stem))
+
+        return {n for n in names if n}
+
+    def _auto_append_usm_key_increment(self, report: dict[str, Any]) -> None:
+        key_val = self._parse_sync_key(report.get("usm_decrypt_key"))
+        if key_val is None:
+            key_val = self._parse_sync_key(report.get("genshin_like_key"))
+        if key_val is None:
+            return
+
+        names = self._collect_increment_names_from_report(report)
+        if not names:
+            return
+
+        target = self._resolve_increment_target_path()
+        if target is None:
+            self.logMessage.emit("[WARN] [USM KEY] failed to resolve incremental file path")
+            return
+
+        merged = self._read_usm_key_increment_map(target)
+        added = 0
+        for name in names:
+            if name in merged:
+                continue
+            merged[name] = key_val
+            added += 1
+        if added <= 0:
+            return
+
+        try:
+            self._write_usm_key_increment_map(target, merged)
+        except OSError as exc:
+            self.logMessage.emit(f"[WARN] [USM KEY] failed to write increment file: {exc}")
+            return
+
+        self.logMessage.emit(
+            f"[INFO] [USM KEY] increment updated: +{added} -> {target}"
+        )
+
     def _collect_versions_key_state(self, payload: Any) -> dict[str, Any]:
         versions_list = self._load_versions_list_from_payload(payload) or []
         nodes: dict[tuple[str, str, str], dict[str, Any]] = {}
@@ -6841,6 +6952,10 @@ class WebBridge(QObject):
                 if normalized:
                     mapping[normalized] = key_val
 
+        incremental_map, incremental_path = self._load_incremental_key_map()
+        merged_map: dict[str, int] = dict(incremental_map)
+        source_path: str | None = incremental_path
+
         for template_path in SYNC_TEMPLATE_CANDIDATES:
             if not template_path.exists() or not template_path.is_file():
                 continue
@@ -6872,8 +6987,17 @@ class WebBridge(QObject):
                         add_videos(mapping, group.get("videos"), self._parse_sync_key(group.get("key")))
 
             if mapping:
-                return mapping, str(template_path)
+                # Current source priority: report rows > incremental map > template map.
+                for name, key_val in mapping.items():
+                    merged_map.setdefault(name, key_val)
+                if source_path is None:
+                    source_path = str(template_path)
+                else:
+                    source_path = f"{source_path} + {template_path}"
+                break
 
+        if merged_map:
+            return merged_map, source_path
         return {}, None
 
     @Slot(str)
@@ -8326,6 +8450,8 @@ class WebBridge(QObject):
                         if report.get("id"):
                             with self._reports_lock:
                                 self._reports_by_id[str(report["id"])] = dict(report)
+                        if report.get("status") == "ok" and not report.get("extract_only"):
+                            self._auto_append_usm_key_increment(report)
                         self._register_report_artifacts(report)
                         reports.append(report)
                         if report["id"]:
@@ -8358,6 +8484,8 @@ class WebBridge(QObject):
                     if report.get("id"):
                         with self._reports_lock:
                             self._reports_by_id[str(report["id"])] = dict(report)
+                    if report.get("status") == "ok" and not report.get("extract_only"):
+                        self._auto_append_usm_key_increment(report)
                     self._register_report_artifacts(report)
                     reports.append(report)
                     if report["id"]:
