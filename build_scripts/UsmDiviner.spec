@@ -53,9 +53,14 @@ a = Analysis(
     hookspath=[],
     runtime_hooks=[],
     excludedimports=[
-        "PySide6",  # Exclude PySide6 - we use PyQt5 only
+        "PySide6",
+        "PySide6.QtCore",
+        "PySide6.QtGui",
+        "PySide6.QtWidgets",
+        "PySide6.QtWebEngineWidgets",
+        "PySide6.QtNetwork",
         "PySide2",
-        "tkinter",  # Also exclude tkinter which may be pulled in by other packages
+        "tkinter",
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
