@@ -3116,6 +3116,64 @@ HTML_TEMPLATE = r"""<!doctype html>
             trigger.setAttribute("aria-expanded", "false");
         }
 
+        function setCustomSelectDisabled(selectId, disabled) {
+            const instance = customSelectInstances.get(selectId);
+            if (!instance) return;
+            const next = !!disabled;
+            if (instance.select) instance.select.disabled = next;
+            if (instance.trigger) {
+                instance.trigger.disabled = next;
+                instance.trigger.setAttribute("aria-disabled", next ? "true" : "false");
+                if (next) instance.trigger.setAttribute("aria-expanded", "false");
+            }
+            if (next && instance.shell) {
+                instance.shell.classList.remove("open");
+            }
+        }
+
+        function setVideoExportUiRunning(running) {
+            const locked = !!running;
+            if (locked) {
+                closeAllVideoExportMultiSelects();
+                closeCustomSelects(null);
+            }
+
+            ["video_export_output", "video_export_hybrid_limit"].forEach((id) => {
+                const el = byId(id);
+                if (el) el.disabled = locked;
+            });
+
+            [
+                "video_export_output_pick_btn",
+                "video_export_subtitle_pick_btn",
+                "video_export_start_btn",
+                "video_export_close_btn",
+                "video_export_audio_trigger",
+                "video_export_audio_all_btn",
+                "video_export_audio_none_btn",
+                "video_export_subtitle_lang_trigger",
+                "video_export_subtitle_lang_all_btn",
+                "video_export_subtitle_lang_none_btn",
+            ].forEach((id) => {
+                const el = byId(id);
+                if (el) el.disabled = locked;
+            });
+
+            ["video_export_format", "video_export_subtitle_source", "video_export_mode"].forEach((id) => {
+                setCustomSelectDisabled(id, locked);
+            });
+
+            for (let ch = 0; ch < 4; ch++) {
+                const box = byId(`video_export_audio_ch${ch}`);
+                if (box) box.disabled = locked;
+            }
+            const codes = ["CHS", "CHT", "DE", "EN", "ES", "FR", "ID", "IT", "JP", "KR", "PT", "RU", "TH", "TR", "VI"];
+            for (const code of codes) {
+                const box = byId(`video_export_subtitle_lang_${code}`);
+                if (box) box.disabled = locked;
+            }
+        }
+
         function updateVideoExportSubtitleLocalInfo() {
             const dict = t(currentLang());
             const info = byId("video_export_subtitle_local_info");
@@ -3129,6 +3187,7 @@ HTML_TEMPLATE = r"""<!doctype html>
         }
 
         function updateVideoExportSubtitleSourceUi() {
+            const locked = !!videoExportRunning;
             const source = String((byId("video_export_subtitle_source") && byId("video_export_subtitle_source").value) || "off");
             const localGroup = byId("video_export_subtitle_local_group");
             const pickBtn = byId("video_export_subtitle_pick_btn");
@@ -3139,21 +3198,21 @@ HTML_TEMPLATE = r"""<!doctype html>
             const langNoneBtn = byId("video_export_subtitle_lang_none_btn");
             const showLocal = source === "local";
             if (localGroup) localGroup.style.display = showLocal ? "" : "none";
-            if (pickBtn) pickBtn.disabled = source !== "local";
+            if (pickBtn) pickBtn.disabled = locked || source !== "local";
             if (localInfo) localInfo.style.opacity = source === "local" ? "1" : "0.65";
-            if (langShell) langShell.style.opacity = source === "off" ? "0.6" : "1";
+            if (langShell) langShell.style.opacity = (locked || source === "off") ? "0.6" : "1";
             if (langTrigger) {
-                langTrigger.disabled = source === "off";
-                if (source === "off") {
+                langTrigger.disabled = locked || source === "off";
+                if (locked || source === "off") {
                     closeVideoExportSubtitleLangShell();
                 }
             }
-            if (langAllBtn) langAllBtn.disabled = source === "off";
-            if (langNoneBtn) langNoneBtn.disabled = source === "off";
+            if (langAllBtn) langAllBtn.disabled = locked || source === "off";
+            if (langNoneBtn) langNoneBtn.disabled = locked || source === "off";
             const codes = ["CHS", "CHT", "DE", "EN", "ES", "FR", "ID", "IT", "JP", "KR", "PT", "RU", "TH", "TR", "VI"];
             for (const code of codes) {
                 const box = byId(`video_export_subtitle_lang_${code}`);
-                if (box) box.disabled = source === "off";
+                if (box) box.disabled = locked || source === "off";
             }
         }
 
@@ -3244,7 +3303,7 @@ HTML_TEMPLATE = r"""<!doctype html>
         function runVideoExportPayload(payload) {
             if (!bridge || !bridge.startVideoExport || videoExportRunning) return;
             videoExportRunning = true;
-            byId("video_export_start_btn").disabled = true;
+            setVideoExportUiRunning(true);
             bridge.startVideoExport(JSON.stringify(payload));
         }
 
@@ -3269,6 +3328,7 @@ HTML_TEMPLATE = r"""<!doctype html>
         }
 
         function updateVideoExportCapabilityUi() {
+            const locked = !!videoExportRunning;
             const dict = t(currentLang());
             const hasAnyAudio = videoExportCandidates.some((item) => {
                 const tracks = Array.isArray(item && item.audio_tracks) ? item.audio_tracks : [];
@@ -3281,12 +3341,12 @@ HTML_TEMPLATE = r"""<!doctype html>
             const allBtn = byId("video_export_audio_all_btn");
             const noneBtn = byId("video_export_audio_none_btn");
             if (audioShell) audioShell.style.opacity = hasAnyAudio ? "1" : "0.6";
-            if (audioTrigger) audioTrigger.disabled = !hasAnyAudio;
-            if (allBtn) allBtn.disabled = !hasAnyAudio;
-            if (noneBtn) noneBtn.disabled = !hasAnyAudio;
+            if (audioTrigger) audioTrigger.disabled = locked || !hasAnyAudio;
+            if (allBtn) allBtn.disabled = locked || !hasAnyAudio;
+            if (noneBtn) noneBtn.disabled = locked || !hasAnyAudio;
             for (let ch = 0; ch < 4; ch++) {
                 const box = byId(`video_export_audio_ch${ch}`);
-                if (box) box.disabled = !hasAnyAudio;
+                if (box) box.disabled = locked || !hasAnyAudio;
             }
             if (!hasAnyAudio) {
                 const summary = byId("video_export_audio_summary");
@@ -3701,7 +3761,7 @@ HTML_TEMPLATE = r"""<!doctype html>
         function displayUsmName(name) {
             const text = String(name || "").trim();
             if (!text) return "";
-            return text.replace(/\\.usm$/i, "");
+            return text.replace(/\.usm$/i, "");
         }
 
         function computeRowVideoExt(row) {
@@ -4546,7 +4606,9 @@ HTML_TEMPLATE = r"""<!doctype html>
         function onVideoExportFinished(payloadJson) {
             const dict = t(currentLang());
             videoExportRunning = false;
-            byId("video_export_start_btn").disabled = false;
+            setVideoExportUiRunning(false);
+            updateVideoExportCapabilityUi();
+            updateVideoExportSubtitleSourceUi();
             setVideoExportOverallProgress(Math.max(videoExportCandidates.length, 1), Math.max(videoExportCandidates.length, 1));
             try {
                 const payload = JSON.parse(payloadJson || "{}");
@@ -4824,7 +4886,7 @@ HTML_TEMPLATE = r"""<!doctype html>
                 box.textContent = t(currentLang()).log_empty_placeholder;
             } else {
                 box.classList.remove("empty");
-                box.textContent = logLines.join("\\n");
+                box.textContent = logLines.join("\n");
                 box.scrollTop = box.scrollHeight;
             }
             updateLogUiState();
@@ -4843,7 +4905,7 @@ HTML_TEMPLATE = r"""<!doctype html>
 
         function exportLog() {
             if (!bridge || !hasUsableLogs()) return;
-            const content = logLines.join("\\n");
+            const content = logLines.join("\n");
             const ts = new Date().toISOString().replace(/[.:]/g, "-");
             const name = "usmdiviner-log-" + ts + ".txt";
             bridge.exportLog(content, name);
@@ -4854,7 +4916,7 @@ HTML_TEMPLATE = r"""<!doctype html>
             const selected = (window.getSelection && window.getSelection().toString()) || "";
             let text = String(selected || "").trim();
             if (!text) {
-                text = logLines.join("\\n").trim();
+                text = logLines.join("\n").trim();
             }
             if (!text) {
                 showCopyToast(dict.log_empty_placeholder || "");
@@ -5476,7 +5538,7 @@ HTML_TEMPLATE = r"""<!doctype html>
             if (!input) return;
             const label = String(displayText || "").trim() || formatInputSelectionLabel(selectedInputFiles);
             input.value = label;
-            input.title = selectedInputFiles.join("\\n");
+            input.title = selectedInputFiles.join("\n");
         }
 
         function previewInput() {
