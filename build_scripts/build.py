@@ -61,7 +61,7 @@ def build_for_platform(platform_name: str = None, clean: bool = False) -> int:
         sys.executable,
         "-m", "PyInstaller",
         "--distpath", str(dist_dir),
-        "--buildpath", str(build_dir),
+        "--workpath", str(build_dir),
         "-y",
         str(spec_file),
     ]

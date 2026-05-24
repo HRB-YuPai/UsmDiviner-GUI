@@ -36,7 +36,7 @@ echo [INFO] Output dir: %DIST_DIR%
 REM Run PyInstaller
 python -m PyInstaller -y ^
     --distpath "%DIST_DIR%" ^
-    --buildpath "%BUILD_DIR%" ^
+    --workpath "%BUILD_DIR%" ^
     "%SPEC_FILE%"
 
 if errorlevel 1 (

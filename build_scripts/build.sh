@@ -72,7 +72,7 @@ fi
 # Run PyInstaller
 python3 -m PyInstaller -y \
     --distpath "$DIST_DIR" \
-    --buildpath "$BUILD_DIR" \
+    --workpath "$BUILD_DIR" \
     "$SPEC_FILE"
 
 if [ $? -ne 0 ]; then
