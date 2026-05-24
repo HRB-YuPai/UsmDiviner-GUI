@@ -41,8 +41,6 @@ a = Analysis(
         "PyQt5.QtCore",
         "PyQt5.QtGui",
         "PyQt5.QtWidgets",
-        "PyQt5.QtWebKit",
-        "PyQt5.QtWebKitWidgets",
         "PyQt5.QtWebChannel",
         "PyQt5.QtWebEngineWidgets",
         "PyQt5.QtNetwork",
@@ -54,7 +52,11 @@ a = Analysis(
     ],
     hookspath=[],
     runtime_hooks=[],
-    excludedimports=[],
+    excludedimports=[
+        "PySide6",  # Exclude PySide6 - we use PyQt5 only
+        "PySide2",
+        "tkinter",  # Also exclude tkinter which may be pulled in by other packages
+    ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
