@@ -438,6 +438,11 @@ def _run_ffmpeg_command(
     except OSError:
         ffmpeg_cwd = None
 
+    logger.info("[FFMPEG] start output=%s timeout=%ss", output_path, timeout)
+    logger.debug("[FFMPEG] executable=%s", ffmpeg)
+    logger.debug("[FFMPEG] cwd=%s", ffmpeg_cwd or "(inherit)")
+    logger.debug("[FFMPEG] command=%s", " ".join(str(part) for part in cmd))
+
     try:
         proc = subprocess.run(
             cmd,
@@ -453,6 +458,9 @@ def _run_ffmpeg_command(
         raise ExternalToolError(f"{error_prefix}: {exc}") from exc
 
     ok = proc.returncode == 0 and output_path.exists() and output_path.stat().st_size > 0
+    logger.info("[FFMPEG] end returncode=%s ok=%s output=%s", proc.returncode, ok, output_path)
+    if proc.stdout:
+        logger.debug("[FFMPEG] output tail:\n%s", proc.stdout[-4000:])
     if not ok:
         _safe_unlink(output_path)
     return ok, proc.stdout[-4000:]

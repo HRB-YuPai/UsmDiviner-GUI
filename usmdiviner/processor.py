@@ -171,17 +171,9 @@ def process_one(
         mp4_path,
     )
     logger.debug("[%s] mux summary: success=%s report=%s", usm_path.name, mux_success, mux_report)
-    _cleanup_outputs(
-        mux_success,
-        opt.keep_intermediate_audio,
-        out_dir,
-        video_path,
-        audio_paths,
-        decoded,
-    )
-    _cleanup_empty_mux_dir(opt, mux_success, out_dir)
-    _clear_removed_paths(mux_success, opt.keep_intermediate_audio, decoded)
-    logger.debug("[%s] cleanup done: mux_success=%s keep_audio=%s", usm_path.name, mux_success, opt.keep_intermediate_audio)
+    # Do not auto-clean extracted artifacts during processing.
+    # Files are cleaned in one explicit exit-time cleanup flow from the GUI.
+    logger.debug("[%s] auto cleanup skipped: mux_success=%s keep_audio=%s", usm_path.name, mux_success, opt.keep_intermediate_audio)
     _emit_progress(progress_callback, 90)
 
     report = _build_report(

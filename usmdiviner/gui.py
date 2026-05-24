@@ -16,10 +16,11 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QObject, Signal, Slot, QUrl
+from PySide6.QtGui import QCloseEvent, QColor, QDesktopServices, QFont, QFontDatabase, QIcon, QPainterPath, QResizeEvent, QRegion
+from PySide6.QtCore import QObject, Qt, Signal, Slot, QUrl
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWebEngineWidgets import QWebEngineView
-from PySide6.QtWidgets import QApplication, QFileDialog
+from PySide6.QtWidgets import QApplication, QFileDialog, QDialog, QHBoxLayout, QLabel, QPushButton, QProgressBar, QVBoxLayout
 
 from .blk_versions import parse_blk_versions
 from .exceptions import UsmDivinerError
@@ -35,6 +36,7 @@ DEFAULT_LANGUAGE = "zh-CN"
 ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
 LANG_DIR = ASSETS_DIR / "i18n"
 FONT_PATH = ASSETS_DIR / "fonts" / "zh-cn.ttf"
+APP_ICON_PATH = ASSETS_DIR / "icon" / "wolf_favicon.png"
 SUPPORTED_LANGUAGES = ("zh-CN", "zh-TW", "en")
 SUBTITLE_LANG_CODES = (
     "CHS",
@@ -74,6 +76,7 @@ def _load_translations() -> dict[str, dict[str, str]]:
 
 
 TRANSLATIONS = _load_translations()
+QT_DIALOG_FONT_FAMILY = ""
 
 
 def _t(lang: str, key: str, **kwargs) -> str:
@@ -184,6 +187,8 @@ HTML_TEMPLATE = """<!doctype html>
                 radial-gradient(900px 500px at 110% -20%, var(--aura2), transparent),
                 linear-gradient(180deg, var(--bg0), var(--bg1));
             transition: background 680ms cubic-bezier(0.22, 1, 0.36, 1), color 320ms ease;
+            height: 100vh;
+            overflow: hidden;
         }
 
         body, .panel, .btn, input[type="text"], .control select, .table-wrap, .log-box, .modal-card {
@@ -191,10 +196,88 @@ HTML_TEMPLATE = """<!doctype html>
         }
 
         .wrap {
-            max-width: 1180px;
+            width: 100%;
             height: 100%;
-            margin: 0 auto;
-            padding: 8px 12px;
+            margin: 0;
+            padding: 0;
+        }
+
+        .window-titlebar {
+            height: 38px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 8px 0 10px;
+            border-bottom: 1px solid var(--line);
+            background: linear-gradient(180deg, var(--panel0), var(--panel1));
+            user-select: none;
+            border-top-left-radius: 16px;
+            border-top-right-radius: 16px;
+        }
+
+        .window-title-left {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            min-width: 0;
+            cursor: move;
+        }
+
+        .window-title-text {
+            font-size: 12px;
+            color: var(--muted);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .window-title-actions {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .window-btn {
+            width: 34px;
+            height: 26px;
+            border: 1px solid var(--btn-border);
+            border-radius: 7px;
+            background: linear-gradient(180deg, var(--btn-bg-0), var(--btn-bg-1));
+            color: var(--btn-fg);
+            font-size: 14px;
+            line-height: 1;
+            cursor: pointer;
+        }
+
+        .window-btn:hover {
+            filter: brightness(1.06);
+        }
+
+        #window_min_btn:hover {
+            background: linear-gradient(180deg, #4e7dd1, #355a9b);
+            border-color: #2e4c81;
+            color: #ffffff;
+        }
+
+        .window-btn-close:hover {
+            background: linear-gradient(180deg, #cf4a4a, #a73636);
+            border-color: #9c2c2c;
+            color: #ffffff;
+        }
+
+        .app-icon {
+            width: 16px;
+            height: 16px;
+            border-radius: 4px;
+            object-fit: cover;
+            flex: 0 0 16px;
+        }
+
+        #title_icon {
+            width: 34px;
+            height: 34px;
+            flex: 0 0 34px;
+            border-radius: 7px;
         }
 
         .panel {
@@ -203,8 +286,9 @@ HTML_TEMPLATE = """<!doctype html>
             flex-direction: column;
             background: linear-gradient(180deg, var(--panel0), var(--panel1));
             border: 1px solid var(--line);
-            border-radius: 14px;
-            box-shadow: 0 12px 28px #00000055;
+            border-radius: 16px;
+            box-shadow: 0 6px 18px #00000033;
+            overflow: hidden;
         }
 
         .head {
@@ -217,6 +301,17 @@ HTML_TEMPLATE = """<!doctype html>
             gap: 12px;
             justify-content: space-between;
             align-items: center;
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 9px;
+            min-width: 0;
+        }
+
+        .brand-text {
+            min-width: 0;
         }
 
         .title {
@@ -482,6 +577,33 @@ HTML_TEMPLATE = """<!doctype html>
 
         .actions-bar {
             margin-top: -2px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .status-strip {
+            margin-right: auto;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            min-height: 34px;
+            padding: 0 10px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: color-mix(in srgb, var(--surface-2) 72%, transparent);
+            color: var(--muted);
+            font-size: 11px;
+            white-space: nowrap;
+            max-width: min(560px, 100%);
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .status-strip strong {
+            color: var(--fg);
+            font-weight: 700;
         }
 
         /* Two-column form layout: left and right 50/50 */
@@ -510,9 +632,23 @@ HTML_TEMPLATE = """<!doctype html>
             align-items: center;
             gap: 10px;
             padding: 0;
+            flex-wrap: wrap;
         }
 
         .mode-row > label:first-child {
+            color: var(--muted);
+            font-size: 12px;
+            white-space: nowrap;
+            min-width: max-content;
+        }
+
+        .mode-inline {
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+        }
+
+        .mode-inline > label:first-child {
             color: var(--muted);
             font-size: 12px;
             white-space: nowrap;
@@ -938,7 +1074,6 @@ HTML_TEMPLATE = """<!doctype html>
         }
 
         .table-wrap,
-        .log-box,
         .blk-preview,
         .sync-result-text,
         .save-success-path {
@@ -946,11 +1081,19 @@ HTML_TEMPLATE = """<!doctype html>
             user-select: none;
         }
 
+        .log-box {
+            cursor: default;
+            user-select: text;
+            -webkit-user-select: text;
+        }
+
         .table-wrap::-webkit-scrollbar,
         .log-box::-webkit-scrollbar,
         .blk-preview::-webkit-scrollbar,
         .sync-result-text::-webkit-scrollbar,
-        .save-success-path::-webkit-scrollbar {
+        .save-success-path::-webkit-scrollbar,
+        .usage-body::-webkit-scrollbar,
+        .settings-content::-webkit-scrollbar {
             width: 12px;
             height: 12px;
             cursor: default;
@@ -960,7 +1103,9 @@ HTML_TEMPLATE = """<!doctype html>
         .log-box::-webkit-scrollbar-track,
         .blk-preview::-webkit-scrollbar-track,
         .sync-result-text::-webkit-scrollbar-track,
-        .save-success-path::-webkit-scrollbar-track {
+        .save-success-path::-webkit-scrollbar-track,
+        .usage-body::-webkit-scrollbar-track,
+        .settings-content::-webkit-scrollbar-track {
             background: var(--scroll-track);
             border-radius: 999px;
             cursor: default;
@@ -970,7 +1115,9 @@ HTML_TEMPLATE = """<!doctype html>
         .log-box::-webkit-scrollbar-thumb,
         .blk-preview::-webkit-scrollbar-thumb,
         .sync-result-text::-webkit-scrollbar-thumb,
-        .save-success-path::-webkit-scrollbar-thumb {
+        .save-success-path::-webkit-scrollbar-thumb,
+        .usage-body::-webkit-scrollbar-thumb,
+        .settings-content::-webkit-scrollbar-thumb {
             background: var(--scroll-thumb);
             border-radius: 999px;
             border: 2px solid var(--scroll-track);
@@ -981,10 +1128,23 @@ HTML_TEMPLATE = """<!doctype html>
         .log-box::-webkit-scrollbar-button,
         .blk-preview::-webkit-scrollbar-button,
         .sync-result-text::-webkit-scrollbar-button,
-        .save-success-path::-webkit-scrollbar-button {
+        .save-success-path::-webkit-scrollbar-button,
+        .usage-body::-webkit-scrollbar-button,
+        .settings-content::-webkit-scrollbar-button {
             width: 0;
             height: 0;
             display: none;
+        }
+
+        .table-wrap,
+        .log-box,
+        .blk-preview,
+        .sync-result-text,
+        .save-success-path,
+        .usage-body,
+        .settings-content {
+            scrollbar-color: var(--scroll-thumb) var(--scroll-track);
+            scrollbar-width: thin;
         }
 
         .mini-track {
@@ -1523,12 +1683,18 @@ HTML_TEMPLATE = """<!doctype html>
         .modal-head {
             display: flex;
             align-items: center;
-            justify-content: space-between;
+            justify-content: center;
             gap: 8px;
             padding: 12px 14px;
             border-bottom: 1px solid var(--line);
             color: var(--fg);
             font-weight: 700;
+            text-align: center;
+        }
+
+        .modal-head > span {
+            width: 100%;
+            text-align: center;
         }
 
         .log-box {
@@ -1643,6 +1809,10 @@ HTML_TEMPLATE = """<!doctype html>
             white-space: pre-wrap;
         }
 
+        #exit_confirm_modal_message {
+            text-align: center;
+        }
+
         #blk_sync_success_modal .save-success-message {
             text-align: center;
         }
@@ -1660,6 +1830,37 @@ HTML_TEMPLATE = """<!doctype html>
             font-size: 12px;
             line-height: 1.45;
             outline: none;
+        }
+
+        .usage-card {
+            width: min(980px, 95vw);
+            height: min(680px, 88vh);
+        }
+
+        .usage-body {
+            flex: 1;
+            min-height: 0;
+            margin: 12px 14px;
+            border: 1px solid var(--line);
+            border-radius: 10px;
+            background: var(--surface);
+            color: var(--fg);
+            padding: 12px;
+            overflow: auto;
+            white-space: pre-wrap;
+            font-size: 12px;
+            line-height: 1.6;
+        }
+
+        .usage-body a {
+            color: var(--acc);
+            text-decoration: underline;
+            cursor: pointer;
+            word-break: break-all;
+        }
+
+        .usage-body a:hover {
+            filter: brightness(1.08);
         }
 
         .log-box.empty {
@@ -1989,26 +2190,6 @@ HTML_TEMPLATE = """<!doctype html>
             height: min(520px, 76vh);
         }
 
-        .settings-content::-webkit-scrollbar {
-            width: 12px;
-        }
-
-        .settings-content::-webkit-scrollbar-track {
-            background: var(--scroll-track);
-            border-radius: 999px;
-        }
-
-        .settings-content::-webkit-scrollbar-thumb {
-            background: var(--scroll-thumb);
-            border-radius: 999px;
-            border: 2px solid var(--scroll-track);
-        }
-
-        .settings-content {
-            scrollbar-color: var(--scroll-thumb) var(--scroll-track);
-            scrollbar-width: thin;
-        }
-
         #log_modal .modal-head {
             justify-content: center;
             text-align: center;
@@ -2097,6 +2278,14 @@ HTML_TEMPLATE = """<!doctype html>
         }
 
         @media (max-width: 900px) {
+            .window-titlebar {
+                padding: 0 6px 0 8px;
+            }
+
+            .window-btn {
+                width: 32px;
+            }
+
             .head-top { flex-direction: column; }
             .toolbar-controls { width: 100%; }
             .control { flex: 1; min-width: 0; }
@@ -2132,11 +2321,24 @@ HTML_TEMPLATE = """<!doctype html>
 <body>
     <div class="wrap">
         <div class="panel">
+            <div class="window-titlebar" id="window_titlebar" onmousedown="beginWindowDrag(event)">
+                <div class="window-title-left">
+                    <img class="app-icon" id="window_icon" src="assets/icon/wolf_favicon.png" alt="App icon" onerror="this.style.display='none'" />
+                    <span class="window-title-text" id="window_title_text">UsmDiviner GUI</span>
+                </div>
+                <div class="window-title-actions">
+                    <button type="button" class="window-btn" id="window_min_btn" onclick="windowMinimize()" title="Minimize" aria-label="Minimize">-</button>
+                    <button type="button" class="window-btn window-btn-close" id="window_close_btn" onclick="windowClose()" title="Close" aria-label="Close">x</button>
+                </div>
+            </div>
             <div class="head">
                 <div class="head-top">
-                    <div>
-                        <h1 class="title" id="title_text">UsmDiviner GUI</h1>
-                        <div class="sub" id="subtitle_text">USM key recovery, extraction, post-export video workflow, and BLB versions viewer</div>
+                    <div class="brand">
+                        <img class="app-icon" id="title_icon" src="assets/icon/wolf_favicon.png" alt="App icon" onerror="this.style.display='none'" />
+                        <div class="brand-text">
+                            <h1 class="title" id="title_text">UsmDiviner GUI</h1>
+                            <div class="sub" id="subtitle_text">USM key recovery, extraction, post-export video workflow, and BLB versions viewer</div>
+                        </div>
                     </div>
                     <div class="toolbar-controls">
                         <div class="control">
@@ -2171,6 +2373,13 @@ HTML_TEMPLATE = """<!doctype html>
                                     <span id="batch_folder_text" class="mode-toggle-text mode-toggle-text-batch">Folder selection</span>
                                 </button>
                             </div>
+                            <div class="mode-inline">
+                                <label id="blk_parse_mode_text" for="blk_parse_toggle">Parse blk</label>
+                                <label class="toggle-switch" id="blk_parse_toggle_shell" data-tooltip="原神 26236578.blk 解析">
+                                    <input type="checkbox" id="blk_parse_toggle" onchange="syncBlkParseToggle()" />
+                                    <span class="toggle-slider"></span>
+                                </label>
+                            </div>
                         </div>
                         <div class="form-cols">
                             <div class="form-col">
@@ -2191,7 +2400,7 @@ HTML_TEMPLATE = """<!doctype html>
                                 </div>
                             </div>
                             <div class="form-col">
-                                <div class="row blk-row">
+                                <div class="row blk-row hidden" id="blk_row">
                                     <label id="blk_label" for="blk_input">Load BLK</label>
                                     <input id="blk_input" type="text" readonly placeholder="" />
                                     <button class="btn" id="blk_pick_btn" data-tooltip="Select BLK file" onclick="pickBlkInput()">Load</button>
@@ -2258,8 +2467,11 @@ HTML_TEMPLATE = """<!doctype html>
                 </div>
 
                 <div class="actions actions-bar">
+                    <div id="status_strip" class="status-strip"></div>
                     <button class="btn" id="open_settings_btn" data-tooltip="Settings" onclick="openSettingsModal()">Settings</button>
                     <button class="btn" id="open_log_btn" data-tooltip="View output logs" onclick="openLogModal()">Logs</button>
+                    <button class="btn" id="open_usage_btn" data-tooltip="Open usage guide" onclick="openUsageModal()">Usage</button>
+                    <button class="btn" id="open_credits_btn" data-tooltip="Open source acknowledgements" onclick="openCreditsModal()">Credits</button>
                     <button class="btn hidden" id="open_video_export_btn" data-tooltip="Export videos from extracted IVF/WAV" onclick="openVideoExportModal()">Export Video</button>
                     <button class="btn hidden" id="export_all_reports_btn" data-tooltip="Export all reports" onclick="exportAllReports()">Export All Reports</button>
                     <button class="btn hidden" id="export_index_btn" data-tooltip="Export processed index JSON" onclick="exportIndexJson()">Export Index</button>
@@ -2276,9 +2488,34 @@ HTML_TEMPLATE = """<!doctype html>
             </div>
             <div id="log_box" class="log-box"></div>
             <div class="modal-actions">
+                <button class="btn" id="copy_log_btn" onclick="copyLogSelectionOrAll()" disabled>Copy</button>
                 <button class="btn" id="export_log_btn" onclick="exportLog()" disabled>Export</button>
                 <button class="btn" id="clear_log_btn" onclick="clearLog()" disabled>Clear log</button>
                 <button class="btn" id="close_log_btn" onclick="closeLogModal()">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="usage_modal" class="modal hidden">
+        <div class="modal-card usage-card">
+            <div class="modal-head">
+                <span id="usage_title">Usage Guide</span>
+            </div>
+            <div id="usage_content" class="usage-body"></div>
+            <div class="modal-actions">
+                <button class="btn" id="usage_close_btn" onclick="closeUsageModal()">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="credits_modal" class="modal hidden">
+        <div class="modal-card usage-card">
+            <div class="modal-head">
+                <span id="credits_title">Open Source Acknowledgements</span>
+            </div>
+            <div id="credits_content" class="usage-body"></div>
+            <div class="modal-actions">
+                <button class="btn" id="credits_close_btn" onclick="closeCreditsModal()">Close</button>
             </div>
         </div>
     </div>
@@ -2640,6 +2877,37 @@ HTML_TEMPLATE = """<!doctype html>
         </div>
     </div>
 
+    <div id="exit_confirm_modal" class="modal hidden">
+        <div class="modal-card confirm-save-card">
+            <div class="modal-head">
+                <span id="exit_confirm_modal_title">Confirm Exit</span>
+            </div>
+            <div class="confirm-save-body">
+                <div id="exit_confirm_modal_message" class="confirm-save-message"></div>
+            </div>
+            <div class="modal-actions">
+                <button class="btn" id="exit_confirm_modal_yes_btn" onclick="confirmExitFromModal()">Yes</button>
+                <button class="btn" id="exit_confirm_modal_no_btn" onclick="closeExitConfirmModal()">No</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="cleanup_progress_modal" class="modal hidden">
+        <div class="modal-card save-success-card">
+            <div class="modal-head">
+                <span id="cleanup_progress_modal_title">Cleaning generated files...</span>
+            </div>
+            <div class="save-success-body">
+                <div id="cleanup_progress_status" class="save-success-message"></div>
+                <div id="cleanup_progress_file" class="save-success-message"></div>
+                <div id="cleanup_progress_rel" class="save-success-message"></div>
+                <div class="progress-wrap" style="margin-top:8px;">
+                    <div class="progress-track"><div id="cleanup_progress_fill" class="progress-fill" style="width:0%;"></div></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
     <script>
         const I18N = JSON.parse(__TRANSLATIONS_JSON__);
@@ -2655,12 +2923,18 @@ HTML_TEMPLATE = """<!doctype html>
         let blkSearchMatches = [];
         let blkSearchIndex = -1;
         let blkParsePending = false;
+        let blkParseEnabled = false;
         let blkSaveSuccessPath = "";
         let blkSaveCanReveal = false;
         let videoExportCandidates = [];
         let videoExportRows = new Map();
         let videoExportRunning = false;
         let videoExportLocalSubtitleFiles = [];
+        let videoExportProgressModel = new Map();
+        let videoExportPumpTimer = null;
+        let videoExportOverallCurrent = 0;
+        let videoExportOverallTarget = 0;
+        let videoExportOverallLastTick = 0;
         let pendingVideoExportPayload = null;
         let pendingVideoExportSubtitlePromptInfo = null;
         let progressPumpTimer = null;
@@ -2686,6 +2960,25 @@ HTML_TEMPLATE = """<!doctype html>
 
         function currentTheme() {
             return byId("theme_select").value || "dark";
+        }
+
+        function formatProgressText(value) {
+            const safe = Math.max(0, Math.min(100, Number(value || 0)));
+            if (safe >= 100) return "100%";
+            if (safe <= 0) return "0%";
+            return `${safe.toFixed(1)}%`;
+        }
+
+        function updateStatusStrip() {
+            const el = byId("status_strip");
+            if (!el) return;
+            const dict = t(currentLang());
+            const runText = isTaskRunning ? (dict.running || "Running") : (dict.status_idle || "Idle");
+            const themeText = currentTheme() === "light" ? (dict.theme_light || "Light") : (dict.theme_dark || "Dark");
+            el.innerHTML = (dict.status_strip_template || "Status: <strong>{state}</strong> | Theme: {theme} | Language: {lang}")
+                .replace("{state}", runText)
+                .replace("{theme}", themeText)
+                .replace("{lang}", currentLang());
         }
 
         function videoExportAudioShell() {
@@ -3095,6 +3388,36 @@ HTML_TEMPLATE = """<!doctype html>
                 el.textContent = text;
                 el.style.whiteSpace = '';
             }
+        }
+
+        function setTextWithLinks(id, text) {
+            const el = byId(id);
+            if (!el) return;
+            const raw = String(text || "");
+            const urlRe = /(https?:\/\/[^\s<]+)/g;
+            let html = "";
+            let last = 0;
+            let m;
+            while ((m = urlRe.exec(raw)) !== null) {
+                const start = m.index;
+                const url = m[0];
+                html += escapeHtml(raw.slice(last, start));
+                html += `<a href="${escapeHtml(url)}" onclick="openExternalLink('${escapeHtml(url)}'); return false;">${escapeHtml(url)}</a>`;
+                last = start + url.length;
+            }
+            html += escapeHtml(raw.slice(last));
+            el.innerHTML = html.replace(/\n/g, "<br>");
+            el.style.whiteSpace = "normal";
+        }
+
+        function openExternalLink(url) {
+            const target = String(url || "").trim();
+            if (!target) return;
+            if (bridge && bridge.openExternalUrl) {
+                bridge.openExternalUrl(target);
+                return;
+            }
+            window.open(target, "_blank", "noopener,noreferrer");
         }
 
         function setPlaceholder(id, text) {
@@ -3627,12 +3950,21 @@ HTML_TEMPLATE = """<!doctype html>
         }
 
         function openBlkSyncSuccessModal(message) {
+            const dict = t(currentLang());
+            setText("blk_sync_success_title", dict.blk_sync_success_title || "BLK Key Sync Complete");
             setText("blk_sync_success_message", message || "");
             byId("blk_sync_success_modal").classList.remove("hidden");
         }
 
         function closeBlkSyncSuccessModal() {
             byId("blk_sync_success_modal").classList.add("hidden");
+        }
+
+        function showBlkParseInvalidPopup() {
+            const dict = t(currentLang());
+            setText("blk_sync_success_title", dict.blk_parse_invalid_title || dict.blk_sync_success_title || "BLK Parse Error");
+            setText("blk_sync_success_message", dict.blk_parse_invalid_popup || "blk file is invalid, please choose again.");
+            byId("blk_sync_success_modal").classList.remove("hidden");
         }
 
         function openBlkSaveConfirmModal(title, message) {
@@ -3715,6 +4047,26 @@ HTML_TEMPLATE = """<!doctype html>
                     "",
                     false,
                     dict.index_export_failed_title || ""
+                );
+            }
+        }
+
+        function onLogExportResult(payloadJson) {
+            const dict = t(currentLang());
+            try {
+                const payload = JSON.parse(payloadJson || "{}");
+                openBlkSaveSuccessModal(
+                    payload.message || dict.log_exported || "",
+                    payload.path || "",
+                    !!payload.can_reveal,
+                    payload.title || dict.log_export_result_title || dict.log_window || ""
+                );
+            } catch (_) {
+                openBlkSaveSuccessModal(
+                    dict.log_exported || "",
+                    "",
+                    false,
+                    dict.log_export_result_title || dict.log_window || ""
                 );
             }
         }
@@ -3858,7 +4210,7 @@ HTML_TEMPLATE = """<!doctype html>
             if (Math.abs(delta) < 0.15) {
                 return target;
             }
-            const speed = (12 + Math.min(60, Math.abs(delta) * 0.95)) * urgency;
+            const speed = (7 + Math.min(52, Math.abs(delta) * 0.85)) * urgency;
             const maxStep = Math.max(0.2, speed * dtSec);
             if (delta > 0) {
                 return Math.min(target, current + maxStep);
@@ -3871,7 +4223,7 @@ HTML_TEMPLATE = """<!doctype html>
             const fill = byId(`${id}_progress_fill`);
             const text = byId(`${id}_progress_text`);
             if (fill) fill.style.width = `${safe}%`;
-            if (text) text.textContent = `${Math.round(safe)}%`;
+            if (text) text.textContent = formatProgressText(safe);
         }
 
         function _ensureProgressPump() {
@@ -3911,7 +4263,7 @@ HTML_TEMPLATE = """<!doctype html>
             const overallUrgency = overallProgressTarget >= 99 ? 3.0 : 1.25;
             overallProgressCurrent = _advanceProgress(overallProgressCurrent, overallProgressTarget, overallDtSec, overallUrgency);
             byId("overall_progress_fill").style.width = `${overallProgressCurrent}%`;
-            byId("overall_progress_value").textContent = `${Math.round(overallProgressCurrent)}%`;
+            byId("overall_progress_value").textContent = formatProgressText(overallProgressCurrent);
 
             const overallPending = Math.abs(overallProgressTarget - overallProgressCurrent) >= 0.15;
             if (pendingRows || overallPending) {
@@ -3935,13 +4287,8 @@ HTML_TEMPLATE = """<!doctype html>
                 target: value,
                 lastTick: Date.now(),
             };
-            model.target = value;
+            model.target = value >= 100 ? 100 : Math.max(Number(model.target || 0), value);
             rowProgressModel.set(id, model);
-
-            if (value >= 100) {
-                model.display = 100;
-                _renderProgressImmediate(id, 100);
-            }
             _ensureProgressPump();
         }
 
@@ -3949,10 +4296,8 @@ HTML_TEMPLATE = """<!doctype html>
             const t = Math.max(0, Number(total || 0));
             const d = Math.max(0, Math.min(t, Number(done || 0)));
             overallProgressTarget = t > 0 ? (d * 100) / t : 0;
-            if (overallProgressTarget >= 100) {
-                overallProgressCurrent = 100;
-                byId("overall_progress_fill").style.width = "100%";
-                byId("overall_progress_value").textContent = "100%";
+            if (overallProgressTarget < 100) {
+                overallProgressTarget = Math.max(overallProgressCurrent, overallProgressTarget);
             }
             _ensureProgressPump();
         }
@@ -3969,9 +4314,14 @@ HTML_TEMPLATE = """<!doctype html>
             if (!body) return;
             body.innerHTML = "";
             videoExportRows.clear();
+            videoExportProgressModel.clear();
+            videoExportOverallCurrent = 0;
+            videoExportOverallTarget = 0;
+            videoExportOverallLastTick = 0;
             for (const item of videoExportCandidates) {
                 const id = String(item.id || item.name || Math.random());
                 videoExportRows.set(id, { id, progress: 0, status: dict.video_export_status_pending || "Pending" });
+                videoExportProgressModel.set(id, { display: 0, target: 0, lastTick: Date.now() });
                 const tr = document.createElement("tr");
                 tr.id = `video_export_row_${id}`;
                 const audioText = formatVideoExportAudioTracks(item, true);
@@ -3992,28 +4342,88 @@ HTML_TEMPLATE = """<!doctype html>
             setVideoExportOverallProgress(0, Math.max(videoExportCandidates.length, 1));
         }
 
+        function _ensureVideoExportPump() {
+            if (videoExportPumpTimer !== null) return;
+            videoExportPumpTimer = window.setTimeout(_pumpVideoExportProgress, 33);
+        }
+
+        function _pumpVideoExportProgress() {
+            videoExportPumpTimer = null;
+            const now = Date.now();
+            let pendingRows = false;
+
+            videoExportRows.forEach((row, id) => {
+                const model = videoExportProgressModel.get(id) || { display: Number(row.progress || 0), target: Number(row.progress || 0), lastTick: now };
+                const dtSec = Math.max(0.016, Math.min(0.2, (now - (model.lastTick || now)) / 1000));
+                const urgency = model.target >= 99 ? 3.0 : 1.15;
+                const next = _advanceProgress(Number(model.display || 0), Number(model.target || 0), dtSec, urgency);
+                model.display = next;
+                model.lastTick = now;
+                videoExportProgressModel.set(id, model);
+
+                row.progress = next;
+                videoExportRows.set(id, row);
+                const fill = byId(`video_export_fill_${id}`);
+                const text = byId(`video_export_text_${id}`);
+                if (fill) fill.style.width = `${next}%`;
+                if (text) text.textContent = formatProgressText(next);
+
+                if (Math.abs(Number(model.target || 0) - next) >= 0.15) pendingRows = true;
+            });
+
+            const dtOverall = Math.max(0.016, Math.min(0.2, (now - (videoExportOverallLastTick || now)) / 1000));
+            videoExportOverallLastTick = now;
+            const overallUrgency = videoExportOverallTarget >= 99 ? 3.1 : 1.25;
+            videoExportOverallCurrent = _advanceProgress(videoExportOverallCurrent, videoExportOverallTarget, dtOverall, overallUrgency);
+
+            const fill = byId("video_export_overall_fill");
+            const text = byId("video_export_overall_value");
+            if (fill) fill.style.width = `${videoExportOverallCurrent}%`;
+            if (text) text.textContent = formatProgressText(videoExportOverallCurrent);
+
+            const pendingOverall = Math.abs(videoExportOverallTarget - videoExportOverallCurrent) >= 0.15;
+            if (pendingRows || pendingOverall) {
+                _ensureVideoExportPump();
+            }
+        }
+
         function setVideoExportOverallProgress(done, total) {
             const t = Math.max(1, Number(total || 1));
             const d = Math.max(0, Math.min(t, Number(done || 0)));
-            const pct = Math.round((d * 100) / t);
-            const fill = byId("video_export_overall_fill");
-            const text = byId("video_export_overall_value");
-            if (fill) fill.style.width = `${pct}%`;
-            if (text) text.textContent = `${pct}%`;
+            const byDone = (d * 100) / t;
+
+            let rowAvg = 0;
+            let count = 0;
+            videoExportRows.forEach((row) => {
+                rowAvg += Math.max(0, Math.min(100, Number(row.progress || 0)));
+                count += 1;
+            });
+            if (count > 0) rowAvg /= count;
+
+            let target = Math.max(byDone, rowAvg * 0.92);
+            if (videoExportRunning && target >= 99.5) {
+                target = 99;
+            }
+            videoExportOverallTarget = Math.max(videoExportOverallCurrent, Math.min(100, target));
+            _ensureVideoExportPump();
         }
 
         function updateVideoExportRowProgress(id, progress, status) {
             const value = Math.max(0, Math.min(100, Number(progress || 0)));
-            const fill = byId(`video_export_fill_${id}`);
-            const text = byId(`video_export_text_${id}`);
             const statusEl = byId(`video_export_status_${id}`);
             const dict = t(currentLang());
-            if (fill) fill.style.width = `${value}%`;
-            if (text) text.textContent = `${Math.round(value)}%`;
+            const row = videoExportRows.get(id) || { id, progress: 0, status: dict.video_export_status_pending || "Pending" };
+            const model = videoExportProgressModel.get(id) || { display: Number(row.progress || 0), target: 0, lastTick: Date.now() };
+            model.target = value >= 100 ? 100 : Math.max(Number(model.target || 0), value);
+            videoExportProgressModel.set(id, model);
+            row.progress = Number(model.display || 0);
+            videoExportRows.set(id, row);
+
             if (statusEl && status) {
                 const normalizedKey = normalizeVideoExportStatusText(status);
                 statusEl.textContent = normalizedKey ? (dict[`video_export_status_${normalizedKey}`] || String(status)) : String(status);
             }
+            _ensureVideoExportPump();
         }
 
         function openVideoExportModal() {
@@ -4027,10 +4437,31 @@ HTML_TEMPLATE = """<!doctype html>
             byId("video_export_modal").classList.remove("hidden");
         }
 
+        function resetVideoExportModalOptions() {
+            if (byId("video_export_audio_ch0")) byId("video_export_audio_ch0").checked = true;
+            if (byId("video_export_audio_ch1")) byId("video_export_audio_ch1").checked = true;
+            if (byId("video_export_audio_ch2")) byId("video_export_audio_ch2").checked = true;
+            if (byId("video_export_audio_ch3")) byId("video_export_audio_ch3").checked = true;
+            if (byId("video_export_subtitle_source")) byId("video_export_subtitle_source").value = "online";
+            if (byId("video_export_mode")) byId("video_export_mode").value = "container";
+            if (byId("video_export_hybrid_limit")) byId("video_export_hybrid_limit").value = "2";
+            setVideoExportSubtitleLangAll(true);
+            videoExportLocalSubtitleFiles = [];
+            updateVideoExportSubtitleLocalInfo();
+            updateVideoExportSubtitleSourceUi();
+            updateVideoExportModeUi();
+            refreshVideoExportAudioSummary();
+            refreshVideoExportSubtitleLangSummary();
+            updateVideoExportCapabilityUi();
+            refreshCustomSelect("video_export_subtitle_source");
+            refreshCustomSelect("video_export_mode");
+        }
+
         function closeVideoExportModal() {
             if (videoExportRunning) return;
             closeVideoExportSubtitleConvertModal();
             byId("video_export_modal").classList.add("hidden");
+            resetVideoExportModalOptions();
         }
 
         function devReloadStyle() {
@@ -4069,20 +4500,29 @@ HTML_TEMPLATE = """<!doctype html>
             } catch (_) {
                 payload = {};
             }
+            const hadCandidates = Array.isArray(videoExportCandidates) && videoExportCandidates.length > 0;
             videoExportCandidates = Array.isArray(payload.candidates) ? payload.candidates : [];
             const out = String(payload.default_output_dir || "");
             if (byId("video_export_output") && out) {
                 byId("video_export_output").value = out;
             }
-            if (byId("video_export_audio_ch0")) byId("video_export_audio_ch0").checked = true;
-            if (byId("video_export_audio_ch1")) byId("video_export_audio_ch1").checked = true;
-            if (byId("video_export_audio_ch2")) byId("video_export_audio_ch2").checked = true;
-            if (byId("video_export_audio_ch3")) byId("video_export_audio_ch3").checked = true;
-            setVideoExportSubtitleLangAll(true);
-            if (byId("video_export_subtitle_source")) byId("video_export_subtitle_source").value = "online";
-            if (byId("video_export_mode")) byId("video_export_mode").value = "container";
-            if (byId("video_export_hybrid_limit")) byId("video_export_hybrid_limit").value = "2";
-            videoExportLocalSubtitleFiles = [];
+            if (!hadCandidates) {
+                if (byId("video_export_audio_ch0")) byId("video_export_audio_ch0").checked = true;
+                if (byId("video_export_audio_ch1")) byId("video_export_audio_ch1").checked = true;
+                if (byId("video_export_audio_ch2")) byId("video_export_audio_ch2").checked = true;
+                if (byId("video_export_audio_ch3")) byId("video_export_audio_ch3").checked = true;
+                setVideoExportSubtitleLangAll(true);
+                if (byId("video_export_subtitle_source")) byId("video_export_subtitle_source").value = "online";
+                if (byId("video_export_mode")) {
+                    const modeEl = byId("video_export_mode");
+                    const modeVal = String(modeEl.value || "");
+                    if (!["container", "burn", "hybrid"].includes(modeVal)) {
+                        modeEl.value = "container";
+                    }
+                }
+                if (byId("video_export_hybrid_limit")) byId("video_export_hybrid_limit").value = "2";
+                videoExportLocalSubtitleFiles = [];
+            }
             updateVideoExportSubtitleLocalInfo();
             updateVideoExportSubtitleSourceUi();
             updateVideoExportModeUi();
@@ -4107,9 +4547,9 @@ HTML_TEMPLATE = """<!doctype html>
             const dict = t(currentLang());
             videoExportRunning = false;
             byId("video_export_start_btn").disabled = false;
+            setVideoExportOverallProgress(Math.max(videoExportCandidates.length, 1), Math.max(videoExportCandidates.length, 1));
             try {
                 const payload = JSON.parse(payloadJson || "{}");
-                closeVideoExportModal();
                 openBlkSaveSuccessModal(
                     payload.message || "",
                     payload.path || "",
@@ -4117,7 +4557,6 @@ HTML_TEMPLATE = """<!doctype html>
                     payload.title || dict.video_export_result_title || ""
                 );
             } catch (_) {
-                closeVideoExportModal();
                 openBlkSaveSuccessModal(
                     dict.video_export_failed || "",
                     "",
@@ -4135,6 +4574,7 @@ HTML_TEMPLATE = """<!doctype html>
             const dict = t(lang);
             document.documentElement.lang = lang;
             document.title = dict.app_title;
+            setText("window_title_text", dict.app_title);
             setText("title_text", dict.app_title);
             setText("subtitle_text", dict.app_subtitle);
             setText("lang_label_text", dict.lang_label);
@@ -4145,6 +4585,7 @@ HTML_TEMPLATE = """<!doctype html>
             setText("theme_opt_dark", dict.theme_dark);
             setText("theme_opt_light", dict.theme_light);
             setText("analysis_mode_text", dict.analysis_mode);
+            setText("blk_parse_mode_text", dict.blk_parse_toggle_label || "Parse blk");
             setText("single_file_text", dict.single_file);
             setText("batch_folder_text", dict.batch_folder);
             setText("output_label", dict.output_folder);
@@ -4179,12 +4620,26 @@ HTML_TEMPLATE = """<!doctype html>
             setText("settings_opt_mux_mkv_text", dict.mux_mkv);
             setText("settings_opt_manual_key_text", dict.manual_key);
             setText("open_log_btn", dict.open_log);
+            setText("open_credits_btn", dict.open_credits || "Credits");
             setText("open_video_export_btn", dict.export_video || "Export Video");
             setText("export_all_reports_btn", dict.export_all_reports || "Export All Reports");
             setText("log_window_title", dict.log_window);
+            setText("copy_log_btn", dict.copy_log || dict.blk_versions_copy || "Copy");
             setText("export_log_btn", dict.export_log);
             setText("clear_log_btn", dict.clear_log);
             setText("close_log_btn", dict.close);
+            setText("open_usage_btn", dict.open_usage || "Usage");
+            setText("usage_title", dict.usage_title || "Usage Guide");
+            setText("usage_close_btn", dict.close);
+            setTextWithLinks("usage_content", dict.usage_content || "");
+            setText("credits_title", dict.credits_title || "Open Source Acknowledgements");
+            setTextWithLinks("credits_content", dict.credits_content || "");
+            setText("credits_close_btn", dict.close || "Close");
+            setText("exit_confirm_modal_title", dict.exit_confirm_title || "");
+            setText("exit_confirm_modal_message", dict.exit_confirm_message || "");
+            setText("exit_confirm_modal_yes_btn", dict.yes || "Yes");
+            setText("exit_confirm_modal_no_btn", dict.no || "No");
+            setText("cleanup_progress_modal_title", dict.cleanup_dialog_title || "");
             setText("run", dict.run);
             setText("blk_label", dict.blk_file_label);
             setText("blk_pick_btn", dict.btn_blk_load);
@@ -4277,6 +4732,7 @@ HTML_TEMPLATE = """<!doctype html>
             setTooltip("report_pick_btn", dict.btn_report_pick_tooltip);
             setTooltip("blk_pick_btn", dict.btn_blk_pick_tooltip);
             setTooltip("open_versions_btn", dict.btn_view_versions_tooltip);
+            setTooltip("blk_parse_toggle_shell", dict.blk_parse_toggle_tooltip || "原神 26236578.blk 解析");
             setTooltip("video_export_output_pick_btn", dict.browse || "Browse");
             setTooltip("video_export_subtitle_pick_btn", dict.video_export_subtitle_pick_tooltip || dict.video_export_subtitle_pick || "Pick");
             setTooltip("video_export_start_btn", dict.video_export_start_tooltip || dict.video_export_start || "Start Export");
@@ -4286,11 +4742,14 @@ HTML_TEMPLATE = """<!doctype html>
             setText("settings_cancel_btn", dict.settings_cancel);
             setTooltip("open_settings_btn", dict.btn_settings_tooltip);
             setTooltip("open_log_btn", dict.btn_logs_tooltip);
+            setTooltip("open_usage_btn", dict.btn_usage_tooltip || dict.open_usage || "Usage");
+            setTooltip("open_credits_btn", dict.btn_credits_tooltip || dict.open_credits || "Credits");
             setTooltip("open_video_export_btn", dict.btn_export_video_tooltip || dict.export_video);
             setTooltip("export_all_reports_btn", dict.btn_export_all_reports_tooltip || dict.export_all_reports);
             setTooltip("export_index_btn", dict.btn_export_index_tooltip || dict.export_index);
             setTooltip("run", dict.btn_run_tooltip);
             setTooltip("export_log_btn", dict.btn_export_log_tooltip);
+            setTooltip("copy_log_btn", dict.btn_copy_log_tooltip || dict.blk_versions_copy || "Copy");
             setTooltip("clear_log_btn", dict.btn_clear_log_tooltip);
             setTooltip("close_log_btn", dict.btn_close_log_tooltip);
             setTooltip("settings_ok_btn", dict.btn_settings_ok_tooltip);
@@ -4328,7 +4787,9 @@ HTML_TEMPLATE = """<!doctype html>
             renderBlkStatus();
             renderBlkModal();
             updateBlkSearchStatus();
+            syncBlkParseToggle(false);
             renderLogBox();
+            updateStatusStrip();
         }
 
         function appendLog(line) {
@@ -4346,9 +4807,11 @@ HTML_TEMPLATE = """<!doctype html>
         }
 
         function updateLogUiState() {
+            const copyBtn = byId("copy_log_btn");
             const exportBtn = byId("export_log_btn");
             const clearBtn = byId("clear_log_btn");
             const hasLogs = hasUsableLogs();
+            if (copyBtn) copyBtn.disabled = !hasLogs;
             if (exportBtn) exportBtn.disabled = !hasLogs;
             if (clearBtn) clearBtn.disabled = !hasLogs;
         }
@@ -4386,6 +4849,21 @@ HTML_TEMPLATE = """<!doctype html>
             bridge.exportLog(content, name);
         }
 
+        function copyLogSelectionOrAll() {
+            const dict = t(currentLang());
+            const selected = (window.getSelection && window.getSelection().toString()) || "";
+            let text = String(selected || "").trim();
+            if (!text) {
+                text = logLines.join("\\n").trim();
+            }
+            if (!text) {
+                showCopyToast(dict.log_empty_placeholder || "");
+                return;
+            }
+            copyTextToClipboard(text);
+            showCopyToast(dict.cell_copied || "Copied");
+        }
+
         function exportIndexJson() {
             if (!bridge || !bridge.exportIndexJson) return;
             bridge.exportIndexJson();
@@ -4403,6 +4881,91 @@ HTML_TEMPLATE = """<!doctype html>
 
         function closeLogModal() {
             byId("log_modal").classList.add("hidden");
+        }
+
+        function openUsageModal() {
+            byId("usage_modal").classList.remove("hidden");
+        }
+
+        function closeUsageModal() {
+            byId("usage_modal").classList.add("hidden");
+        }
+
+        function openCreditsModal() {
+            byId("credits_modal").classList.remove("hidden");
+        }
+
+        function closeCreditsModal() {
+            byId("credits_modal").classList.add("hidden");
+        }
+
+        function openExitConfirmModal(title, message, yesText, noText) {
+            setText("exit_confirm_modal_title", title || "");
+            setText("exit_confirm_modal_message", message || "");
+            setText("exit_confirm_modal_yes_btn", yesText || "Yes");
+            setText("exit_confirm_modal_no_btn", noText || "No");
+            byId("exit_confirm_modal").classList.remove("hidden");
+        }
+
+        function closeExitConfirmModal() {
+            byId("exit_confirm_modal").classList.add("hidden");
+        }
+
+        function openCleanupProgressModal() {
+            byId("cleanup_progress_modal").classList.remove("hidden");
+        }
+
+        function closeCleanupProgressModal() {
+            byId("cleanup_progress_modal").classList.add("hidden");
+        }
+
+        function onExitPromptReady(payloadJson) {
+            const dict = t(currentLang());
+            try {
+                const payload = JSON.parse(payloadJson || "{}");
+                openExitConfirmModal(
+                    payload.title || dict.exit_confirm_title || "",
+                    payload.message || dict.exit_confirm_message || "",
+                    payload.yes || dict.yes || "Yes",
+                    payload.no || dict.no || "No"
+                );
+            } catch (_) {
+                openExitConfirmModal(
+                    dict.exit_confirm_title || "",
+                    dict.exit_confirm_message || "",
+                    dict.yes || "Yes",
+                    dict.no || "No"
+                );
+            }
+        }
+
+        function confirmExitFromModal() {
+            closeExitConfirmModal();
+            openCleanupProgressModal();
+            if (bridge && bridge.confirmWindowClose) {
+                bridge.confirmWindowClose();
+            }
+        }
+
+        function onCleanupProgress(payloadJson) {
+            let payload = {};
+            try {
+                payload = JSON.parse(payloadJson || "{}");
+            } catch (_) {
+                payload = {};
+            }
+            const done = Math.max(0, Number(payload.done || 0));
+            const total = Math.max(1, Number(payload.total || 1));
+            const pct = Math.max(0, Math.min(100, (done * 100) / total));
+            setText("cleanup_progress_modal_title", payload.title || "");
+            setText("cleanup_progress_status", payload.status || "");
+            setText("cleanup_progress_file", payload.file || "");
+            setText("cleanup_progress_rel", payload.relative_path || "");
+            const fill = byId("cleanup_progress_fill");
+            if (fill) fill.style.width = `${pct}%`;
+            if (byId("cleanup_progress_modal").classList.contains("hidden")) {
+                openCleanupProgressModal();
+            }
         }
 
         function openSettingsModal() {
@@ -4456,6 +5019,7 @@ HTML_TEMPLATE = """<!doctype html>
             run.disabled = running;
             run.textContent = running ? dict.running : dict.run;
             renderPostProcessButtons();
+            updateStatusStrip();
         }
 
         function setField(field, value) {
@@ -4494,6 +5058,9 @@ HTML_TEMPLATE = """<!doctype html>
             if (field === "input") {
                 previewInput();
             } else if (field === "blk_input") {
+                if (!blkParseEnabled) {
+                    return;
+                }
                 blkParsePending = true;
                 blkVersionsData = null;
                 blkVersionsEditorText = "";
@@ -4721,6 +5288,9 @@ HTML_TEMPLATE = """<!doctype html>
         }
 
         function setBlkVersions(payloadJson) {
+            if (!blkParseEnabled) {
+                return;
+            }
             blkParsePending = false;
             try {
                 blkVersionsData = JSON.parse(payloadJson);
@@ -4729,12 +5299,18 @@ HTML_TEMPLATE = """<!doctype html>
                 blkVersionsData = { error: payloadJson };
                 blkVersionsEditorText = "";
             }
+            const compatible = isVersionsJsonCompatible(blkVersionsData && blkVersionsData.versions_json);
+            if (!compatible) {
+                resetBlkInputField();
+                showBlkParseInvalidPopup();
+                return;
+            }
             renderBlkStatus();
             renderBlkModal();
         }
 
         function pickBlkInput() {
-            if (!bridge) return;
+            if (!bridge || !blkParseEnabled) return;
             bridge.pickBlkFile();
         }
 
@@ -4805,6 +5381,58 @@ HTML_TEMPLATE = """<!doctype html>
                 const active = mode === "batch" ? batchText : singleText;
                 btn.setAttribute("aria-label", `${dict.analysis_mode || "Mode"}: ${active}`);
                 btn.removeAttribute("title");
+            }
+        }
+
+        function clearBlkParseState() {
+            blkParsePending = false;
+            blkVersionsData = null;
+            blkVersionsEditorText = "";
+            renderBlkStatus();
+            renderBlkModal();
+        }
+
+        function resetBlkInputField() {
+            const blkInput = byId("blk_input");
+            if (blkInput) {
+                blkInput.value = "";
+                blkInput.title = "";
+            }
+            clearBlkParseState();
+        }
+
+        function isVersionsJsonCompatible(raw) {
+            const text = String(raw || "").trim();
+            if (!text || text === "null") return false;
+            let decoded = null;
+            try {
+                decoded = JSON.parse(text);
+            } catch (_) {
+                return false;
+            }
+            if (Array.isArray(decoded)) {
+                return decoded.every((item) => item && typeof item === "object" && !Array.isArray(item));
+            }
+            if (decoded && typeof decoded === "object") {
+                return Array.isArray(decoded.list);
+            }
+            return false;
+        }
+
+        function syncBlkParseToggle(clearExisting = true) {
+            const toggle = byId("blk_parse_toggle");
+            const row = byId("blk_row");
+            blkParseEnabled = !!(toggle && toggle.checked);
+            if (row) row.classList.toggle("hidden", !blkParseEnabled);
+            if (!blkParseEnabled) {
+                closeBlkVersionsModal();
+                if (clearExisting) {
+                    resetBlkInputField();
+                }
+                return;
+            }
+            if (clearExisting) {
+                clearBlkParseState();
             }
         }
 
@@ -4913,15 +5541,42 @@ HTML_TEMPLATE = """<!doctype html>
             document.documentElement.setAttribute("data-theme", mode);
             byId("theme_select").value = mode;
             refreshCustomSelect("theme_select");
+            if (bridge && bridge.setTheme) {
+                bridge.setTheme(mode);
+            }
             try {
                 localStorage.setItem("usmdiviner_theme", mode);
             } catch (_) {
                 // Ignore storage errors in restricted runtime.
             }
+            updateStatusStrip();
         }
 
         function setTheme(theme) {
             applyTheme(theme);
+        }
+
+        function beginWindowDrag(event) {
+            if (!event || event.button !== 0) return;
+            const target = event.target;
+            if (target instanceof Element && target.closest(".window-title-actions")) {
+                return;
+            }
+            if (bridge && bridge.beginWindowDrag) {
+                bridge.beginWindowDrag();
+            }
+        }
+
+        function windowMinimize() {
+            if (bridge && bridge.windowMinimize) {
+                bridge.windowMinimize();
+            }
+        }
+
+        function windowClose() {
+            if (bridge && bridge.requestWindowClose) {
+                bridge.requestWindowClose();
+            }
         }
 
         function runTask() {
@@ -4963,10 +5618,13 @@ HTML_TEMPLATE = """<!doctype html>
             bridge.blkSavePromptReady.connect(onBlkSavePromptReady);
             bridge.blkSaveCompleted.connect(onBlkSaveCompleted);
             bridge.indexExportResultReady.connect(onIndexExportResult);
+            bridge.logExportResultReady.connect(onLogExportResult);
             bridge.videoExportReady.connect(onVideoExportReady);
             bridge.videoExportProgress.connect(onVideoExportProgress);
             bridge.videoExportFinished.connect(onVideoExportFinished);
             bridge.runStateChanged.connect(setRunning);
+            bridge.exitPromptReady.connect(onExitPromptReady);
+            bridge.cleanupProgressReady.connect(onCleanupProgress);
             bridge.fieldChosen.connect(setField);
             bridge.fileListReady.connect(loadFileList);
             bridge.fileRowUpdate.connect(updateFileRow);
@@ -4986,6 +5644,8 @@ HTML_TEMPLATE = """<!doctype html>
             const lang = byId("lang_select").value || "zh-CN";
             bridge.setLanguage(lang);
             applyLanguage(lang);
+            syncBlkParseToggle(false);
+            if (bridge.uiReady) bridge.uiReady();
         });
 
         document.addEventListener("click", (event) => {
@@ -5004,6 +5664,10 @@ HTML_TEMPLATE = """<!doctype html>
                 closeCustomSelects();
                 closeVideoExportAudioShell();
                 closeVideoExportSubtitleLangShell();
+                closeUsageModal();
+                closeCreditsModal();
+                closeExitConfirmModal();
+                closeCleanupProgressModal();
                 hideContextMenu();
             }
         });
@@ -5128,6 +5792,164 @@ class _QtLogHandler(logging.Handler):
             self.handleError(record)
 
 
+def _dialog_stylesheet(theme: str) -> str:
+    family = str(QT_DIALOG_FONT_FAMILY or "Segoe UI").replace("'", "")
+    if theme == "light":
+        return (
+            f"QDialog {{ background: #f8f2e8; color: #3b3126; border: 1px solid #d7c9b5; border-radius: 12px; font-family: '{family}'; }}"
+            f"QLabel {{ color: #3b3126; font-size: 12px; font-family: '{family}'; }}"
+            "QLabel#DialogTitle { font-size: 14px; font-weight: 700; color: #3b3126; }"
+            f"QProgressBar {{ border: 1px solid #d8cab6; border-radius: 7px; background: #efe4d4; color: #3b3126; text-align: center; font-family: '{family}'; }}"
+            "QProgressBar::chunk { border-radius: 6px; background: #5aa884; }"
+            f"QPushButton {{ border: 1px solid #cdbca7; border-radius: 8px; padding: 6px 14px; background: #fffaf1; color: #3b3126; font-weight: 600; font-family: '{family}'; }}"
+            "QPushButton:hover { background: #f4eadc; }"
+            "QPushButton#PrimaryButton { background: #5aa884; border-color: #438f70; color: white; }"
+            "QPushButton#PrimaryButton:hover { background: #438f70; }"
+        )
+    return (
+        f"QDialog {{ background: #1f1f1f; color: #e0e0e0; border: 1px solid #3e3e3e; border-radius: 12px; font-family: '{family}'; }}"
+        f"QLabel {{ color: #e0e0e0; font-size: 12px; font-family: '{family}'; }}"
+        "QLabel#DialogTitle { font-size: 14px; font-weight: 700; color: #e0e0e0; }"
+        f"QProgressBar {{ border: 1px solid #505050; border-radius: 7px; background: #1a1a1a; color: #e0e0e0; text-align: center; font-family: '{family}'; }}"
+        "QProgressBar::chunk { border-radius: 6px; background: #2f7d42; }"
+        f"QPushButton {{ border: 1px solid #555555; border-radius: 8px; padding: 6px 14px; background: #3a3a3a; color: #e0e0e0; font-weight: 600; font-family: '{family}'; }}"
+        "QPushButton:hover { background: #2a2a2a; }"
+        "QPushButton#PrimaryButton { background: #2f7d42; border-color: #1e5a2f; color: white; }"
+        "QPushButton#PrimaryButton:hover { background: #1e5a2f; }"
+    )
+
+
+def _load_qt_dialog_font(app: QApplication) -> str:
+    if not FONT_PATH.exists():
+        app.setFont(QFont("Segoe UI", 9))
+        return ""
+    font_id = QFontDatabase.addApplicationFont(str(FONT_PATH))
+    if font_id == -1:
+        app.setFont(QFont("Segoe UI", 9))
+        return ""
+    families = QFontDatabase.applicationFontFamilies(font_id)
+    if not families:
+        app.setFont(QFont("Segoe UI", 9))
+        return ""
+    family = str(families[0])
+    app.setFont(QFont(family, 9))
+    return family
+
+
+class _ExitConfirmDialog(QDialog):
+    def __init__(self, title: str, message: str, yes_text: str, no_text: str, theme: str, parent=None) -> None:
+        super().__init__(parent)
+        self._accepted = False
+        self.setWindowTitle("")
+        self.setModal(True)
+        self.setWindowFlag(Qt.FramelessWindowHint, True)
+        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+        self.setMinimumWidth(520)
+        self.setStyleSheet(_dialog_stylesheet(theme))
+
+        title_label = QLabel(title)
+        title_label.setObjectName("DialogTitle")
+        body_label = QLabel(message)
+        body_label.setWordWrap(True)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        no_btn = QPushButton(no_text)
+        yes_btn = QPushButton(yes_text)
+        yes_btn.setObjectName("PrimaryButton")
+        buttons.addWidget(no_btn)
+        buttons.addWidget(yes_btn)
+
+        layout = QVBoxLayout()
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(10)
+        layout.addWidget(title_label)
+        layout.addWidget(body_label)
+        layout.addLayout(buttons)
+        self.setLayout(layout)
+
+        no_btn.clicked.connect(self.reject)
+        yes_btn.clicked.connect(self._on_accept)
+
+    def _on_accept(self) -> None:
+        self._accepted = True
+        self.accept()
+
+    @property
+    def accepted_choice(self) -> bool:
+        return self._accepted
+
+
+class _CleanupProgressDialog(QDialog):
+    def __init__(self, title: str, theme: str, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("")
+        self.setModal(True)
+        self.setWindowFlag(Qt.FramelessWindowHint, True)
+        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+        self.setMinimumWidth(560)
+        self.setStyleSheet(_dialog_stylesheet(theme))
+        self._title = QLabel(title)
+        self._title.setObjectName("DialogTitle")
+        self._status = QLabel("")
+        self._file_label = QLabel("")
+        self._rel_label = QLabel("")
+        self._bar = QProgressBar()
+        self._bar.setRange(0, 100)
+        self._bar.setValue(0)
+
+        layout = QVBoxLayout()
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(8)
+        layout.addWidget(self._title)
+        layout.addWidget(self._status)
+        layout.addWidget(self._file_label)
+        layout.addWidget(self._rel_label)
+        layout.addWidget(self._bar)
+        self.setLayout(layout)
+
+    def update_step(self, status_text: str, file_name: str, relative_path: str, done: int, total: int) -> None:
+        self._status.setText(status_text)
+        self._file_label.setText(file_name)
+        self._rel_label.setText(relative_path)
+        safe_total = max(1, int(total))
+        safe_done = max(0, min(safe_total, int(done)))
+        self._bar.setValue(int((safe_done * 100) / safe_total))
+        QApplication.processEvents()
+
+
+class _MainView(QWebEngineView):
+    def __init__(self, bridge: "WebBridge") -> None:
+        super().__init__()
+        self._bridge = bridge
+        self._corner_radius = 16
+        self.setWindowFlag(Qt.FramelessWindowHint, True)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.page().setBackgroundColor(QColor(0, 0, 0, 0))
+
+    def _apply_rounded_mask(self) -> None:
+        rect = self.rect()
+        if rect.width() <= 0 or rect.height() <= 0:
+            return
+        path = QPainterPath()
+        path.addRoundedRect(float(rect.x()), float(rect.y()), float(rect.width()), float(rect.height()), self._corner_radius, self._corner_radius)
+        self.setMask(QRegion(path.toFillPolygon().toPolygon()))
+
+    def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._apply_rounded_mask()
+
+    def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
+        if self._bridge.can_close_window():
+            event.accept()
+            return
+        if not self._bridge.can_present_exit_modal():
+            event.accept()
+            return
+        self._bridge.requestWindowClose()
+        event.ignore()
+
+
 class WebBridge(QObject):
     logMessage = Signal(str)
     uiToast = Signal(str)
@@ -5135,6 +5957,7 @@ class WebBridge(QObject):
     blkSavePromptReady = Signal(str)
     blkSaveCompleted = Signal(str)
     indexExportResultReady = Signal(str)
+    logExportResultReady = Signal(str)
     videoExportReady = Signal(str)
     videoExportProgress = Signal(str)
     videoExportFinished = Signal(str)
@@ -5147,18 +5970,37 @@ class WebBridge(QObject):
     fileProgressUpdate = Signal(str)
     overallProgressUpdate = Signal(str)
     styleRefreshed = Signal(str)
+    exitPromptReady = Signal(str)
+    cleanupProgressReady = Signal(str)
+    hostCloseRequested = Signal()
 
     def __init__(self) -> None:
         super().__init__()
+        self._view: _MainView | None = None
+        self._ui_ready = False
+        self._allow_window_close = False
+        self._close_state_lock = threading.Lock()
         self._worker: threading.Thread | None = None
         self._blk_worker: threading.Thread | None = None
         self._video_export_worker: threading.Thread | None = None
+        self._cleanup_worker: threading.Thread | None = None
         self._blk_result_lock = threading.Lock()
         self._last_blk_result: dict | None = None
         self._language = DEFAULT_LANGUAGE
         self._language_lock = threading.Lock()
+        self._theme = "dark"
+        self._theme_lock = threading.Lock()
         self._reports_by_id: dict[str, dict] = {}
         self._reports_lock = threading.Lock()
+        self._artifact_lock = threading.Lock()
+        self._generated_files: set[str] = set()
+        self._generated_dirs: set[str] = set()
+
+    def bind_view(self, view: _MainView) -> None:
+        self._view = view
+
+    def _main_view(self) -> _MainView | None:
+        return self._view
 
     def _set_language(self, language: str) -> None:
         lang = language if language in TRANSLATIONS else DEFAULT_LANGUAGE
@@ -5169,8 +6011,169 @@ class WebBridge(QObject):
         with self._language_lock:
             return self._language
 
+    def _set_theme(self, theme: str) -> None:
+        mode = "light" if str(theme or "").strip().lower() == "light" else "dark"
+        with self._theme_lock:
+            self._theme = mode
+
+    def _get_theme(self) -> str:
+        with self._theme_lock:
+            return self._theme
+
     def _t(self, key: str, **kwargs) -> str:
         return _t(self._get_language(), key, **kwargs)
+
+    def _register_generated_file(self, path: Path) -> None:
+        try:
+            normalized = str(path.resolve())
+        except OSError:
+            normalized = str(path.absolute())
+        with self._artifact_lock:
+            self._generated_files.add(normalized)
+
+    def _register_generated_dir(self, path: Path) -> None:
+        try:
+            normalized = str(path.resolve())
+        except OSError:
+            normalized = str(path.absolute())
+        with self._artifact_lock:
+            self._generated_dirs.add(normalized)
+
+    def _register_report_artifacts(self, report: dict[str, Any]) -> None:
+        output_dir_text = str(report.get("output_dir") or "").strip()
+        if output_dir_text:
+            self._register_generated_dir(Path(output_dir_text))
+
+        report_path_text = str(report.get("report_path") or "").strip()
+        if report_path_text:
+            self._register_generated_file(Path(report_path_text))
+
+        video = report.get("video") or {}
+        video_text = str(video.get("path") or "").strip()
+        if video_text:
+            self._register_generated_file(Path(video_text))
+
+        audio = report.get("audio") or {}
+        if isinstance(audio, dict):
+            for item in audio.values():
+                if not isinstance(item, dict):
+                    continue
+                path_text = str(item.get("path") or "").strip()
+                if path_text:
+                    self._register_generated_file(Path(path_text))
+                decode = item.get("decode") if isinstance(item.get("decode"), dict) else {}
+                wav_text = str(decode.get("wav") or "").strip()
+                if wav_text:
+                    self._register_generated_file(Path(wav_text))
+
+        mux = report.get("mux") or {}
+        if isinstance(mux, dict):
+            for key in ("mp4", "mkv"):
+                mux_text = str(mux.get(key) or "").strip()
+                if mux_text:
+                    self._register_generated_file(Path(mux_text))
+
+    def cleanup_generated_artifacts(
+        self,
+        dialog: _CleanupProgressDialog | None = None,
+        progress_callback: Any | None = None,
+    ) -> None:
+        with self._artifact_lock:
+            file_items = [Path(p) for p in sorted(self._generated_files)]
+            dir_items = [Path(p) for p in sorted(self._generated_dirs)]
+
+        existing_files = [path for path in file_items if path.exists() and path.is_file()]
+        total = len(existing_files)
+        if total <= 0:
+            if dialog:
+                dialog.update_step(
+                    self._t("cleanup_dialog_done", removed=0, failed=0),
+                    self._t("cleanup_file_none"),
+                    "",
+                    1,
+                    1,
+                )
+            if callable(progress_callback):
+                progress_callback(
+                    self._t("cleanup_dialog_done", removed=0, failed=0),
+                    self._t("cleanup_file_none"),
+                    "",
+                    1,
+                    1,
+                )
+            return
+
+        root = Path.cwd()
+        removed = 0
+        failed = 0
+        for idx, path in enumerate(existing_files, 1):
+            try:
+                relative_path = str(path.relative_to(root))
+            except ValueError:
+                relative_path = str(path)
+            if dialog:
+                dialog.update_step(
+                    self._t("cleanup_dialog_progress", done=idx, total=total),
+                    f"{self._t('cleanup_file_label')} {path.name}",
+                    f"{self._t('cleanup_relative_path_label')} {relative_path}",
+                    idx - 1,
+                    total,
+                )
+            if callable(progress_callback):
+                progress_callback(
+                    self._t("cleanup_dialog_progress", done=idx, total=total),
+                    f"{self._t('cleanup_file_label')} {path.name}",
+                    f"{self._t('cleanup_relative_path_label')} {relative_path}",
+                    idx - 1,
+                    total,
+                )
+            try:
+                path.unlink()
+                removed += 1
+            except OSError:
+                failed += 1
+            if dialog:
+                dialog.update_step(
+                    self._t("cleanup_dialog_progress", done=idx, total=total),
+                    f"{self._t('cleanup_file_label')} {path.name}",
+                    f"{self._t('cleanup_relative_path_label')} {relative_path}",
+                    idx,
+                    total,
+                )
+            if callable(progress_callback):
+                progress_callback(
+                    self._t("cleanup_dialog_progress", done=idx, total=total),
+                    f"{self._t('cleanup_file_label')} {path.name}",
+                    f"{self._t('cleanup_relative_path_label')} {relative_path}",
+                    idx,
+                    total,
+                )
+
+        cleanup_dirs: set[Path] = set()
+        cleanup_dirs.update(path.parent for path in existing_files)
+        cleanup_dirs.update(path for path in dir_items if path.exists() and path.is_dir())
+        for folder in sorted(cleanup_dirs, key=lambda p: len(str(p)), reverse=True):
+            try:
+                folder.rmdir()
+            except OSError:
+                continue
+
+        if dialog:
+            dialog.update_step(
+                self._t("cleanup_dialog_done", removed=removed, failed=failed),
+                self._t("cleanup_file_none"),
+                "",
+                total,
+                total,
+            )
+        if callable(progress_callback):
+            progress_callback(
+                self._t("cleanup_dialog_done", removed=removed, failed=failed),
+                self._t("cleanup_file_none"),
+                "",
+                total,
+                total,
+            )
 
     @Slot()
     def reloadStyle(self) -> None:
@@ -5187,8 +6190,96 @@ class WebBridge(QObject):
         self.windowTitleChanged.emit(self._t("app_title"))
 
     @Slot(str)
+    def setTheme(self, theme: str) -> None:
+        self._set_theme(theme)
+
+    def can_present_exit_modal(self) -> bool:
+        with self._close_state_lock:
+            return self._ui_ready
+
+    def can_close_window(self) -> bool:
+        with self._close_state_lock:
+            return self._allow_window_close
+
+    @Slot()
+    def uiReady(self) -> None:
+        with self._close_state_lock:
+            self._ui_ready = True
+
+    @Slot()
+    def requestWindowClose(self) -> None:
+        if self._cleanup_worker and self._cleanup_worker.is_alive():
+            return
+        payload = {
+            "title": self._t("exit_confirm_title"),
+            "message": self._t("exit_confirm_message"),
+            "yes": self._t("yes"),
+            "no": self._t("no"),
+        }
+        self.exitPromptReady.emit(json.dumps(payload, ensure_ascii=False))
+
+    def _emit_cleanup_progress(self, status_text: str, file_name: str, relative_path: str, done: int, total: int) -> None:
+        payload = {
+            "title": self._t("cleanup_dialog_title"),
+            "status": status_text,
+            "file": file_name,
+            "relative_path": relative_path,
+            "done": int(done),
+            "total": int(max(1, total)),
+        }
+        self.cleanupProgressReady.emit(json.dumps(payload, ensure_ascii=False))
+        QApplication.processEvents()
+
+    def _run_cleanup_then_close(self) -> None:
+        self.cleanup_generated_artifacts(progress_callback=self._emit_cleanup_progress)
+        with self._close_state_lock:
+            self._allow_window_close = True
+        self.hostCloseRequested.emit()
+
+    @Slot()
+    def confirmWindowClose(self) -> None:
+        if self._cleanup_worker and self._cleanup_worker.is_alive():
+            return
+        self._cleanup_worker = threading.Thread(target=self._run_cleanup_then_close, daemon=True)
+        self._cleanup_worker.start()
+
+    @Slot()
+    def beginWindowDrag(self) -> None:
+        view = self._main_view()
+        if view is None:
+            return
+        handle = view.windowHandle()
+        if handle is None:
+            return
+        try:
+            handle.startSystemMove()
+        except Exception:
+            return
+
+    @Slot()
+    def windowMinimize(self) -> None:
+        view = self._main_view()
+        if view is None:
+            return
+        view.showMinimized()
+
+    @Slot()
+    def windowClose(self) -> None:
+        view = self._main_view()
+        if view is None:
+            return
+        view.close()
+
+    @Slot(str)
     def copyText(self, text: str) -> None:
         QApplication.clipboard().setText(str(text or ""))
+
+    @Slot(str)
+    def openExternalUrl(self, url: str) -> None:
+        target = str(url or "").strip()
+        if not target:
+            return
+        QDesktopServices.openUrl(QUrl(target))
 
     @staticmethod
     def _parse_input_file_selection(raw_input: str) -> list[str]:
@@ -6041,6 +7132,17 @@ class WebBridge(QObject):
             return
 
         self.logMessage.emit(self._t("log_exported", path=target_path))
+        self.logExportResultReady.emit(
+            json.dumps(
+                {
+                    "title": self._t("log_export_result_title"),
+                    "message": self._t("log_exported", path=target_path),
+                    "path": target_path,
+                    "can_reveal": self._can_reveal_saved_path(),
+                },
+                ensure_ascii=False,
+            )
+        )
 
     @staticmethod
     def _build_index_item(report: dict[str, Any]) -> dict[str, Any]:
@@ -6434,20 +7536,29 @@ class WebBridge(QObject):
         return dedup
 
     def _download_online_subtitle(self, cache_dir: Path, video_stem: str, lang: str) -> Path | None:
-        safe_name = urllib.parse.quote(video_stem, safe="")
-        url = ONLINE_SUBTITLE_RAW_URL.format(lang=lang, name=safe_name)
+        # Subtitle repository typically uses `<usm_name>_<lang>.srt` naming.
+        # Keep legacy fallback (`<usm_name>.srt`) for compatibility.
+        preferred_name = f"{video_stem}_{lang}"
+        candidates = [preferred_name, video_stem]
         target = cache_dir / f"{video_stem}.{lang}.srt"
         if target.exists() and target.stat().st_size > 0:
             return target
 
-        req = urllib.request.Request(url, headers={"User-Agent": "UsmDiviner/1.0"})
-        try:
-            with urllib.request.urlopen(req, timeout=8) as resp:
-                if getattr(resp, "status", 200) >= 400:
-                    return None
-                data = resp.read()
-        except (urllib.error.URLError, TimeoutError, OSError):
-            return None
+        data: bytes | None = None
+        for raw_name in candidates:
+            safe_name = urllib.parse.quote(raw_name, safe="")
+            url = ONLINE_SUBTITLE_RAW_URL.format(lang=lang, name=safe_name)
+            req = urllib.request.Request(url, headers={"User-Agent": "UsmDiviner/1.0"})
+            try:
+                with urllib.request.urlopen(req, timeout=8) as resp:
+                    if getattr(resp, "status", 200) >= 400:
+                        continue
+                    payload = resp.read()
+            except (urllib.error.URLError, TimeoutError, OSError):
+                continue
+            if payload:
+                data = payload
+                break
 
         if not data:
             return None
@@ -6496,6 +7607,7 @@ class WebBridge(QObject):
         ffmpeg: str,
     ) -> None:
         output_dir.mkdir(parents=True, exist_ok=True)
+        self._register_generated_dir(output_dir)
         total = max(1, len(candidates))
         done = 0
         success = 0
@@ -6517,10 +7629,6 @@ class WebBridge(QObject):
                     batch_force_no_subtitles = True
                     subtitle_auto_fallback = True
                     self.logMessage.emit(self._t("video_export_subtitle_online_unstable"))
-                    if export_mode == "burn":
-                        effective_export_mode = "container"
-                        mode_auto_downgraded = True
-                        self.logMessage.emit("[INFO] Video export mode downgraded: burn -> container (no online subtitles available)")
 
             for item in candidates:
                 row_id = str((item or {}).get("id") or "")
@@ -6590,13 +7698,27 @@ class WebBridge(QObject):
                 )
 
                 ok = False
+                if not ivf.exists() or not ivf.is_file():
+                    self.logMessage.emit(
+                        f"[ERROR] [{name}] export input video missing: {ivf} (cwd={Path.cwd()})"
+                    )
                 if ivf.exists() and ivf.is_file():
                     ext = ".mkv" if fmt == "mkv" else ".mp4"
 
-                    def _export_one(path: Path, subs: list[tuple[Path, str]], mode: str) -> bool:
+                    def _mark_output(path: Path, success_flag: bool) -> None:
+                        if success_flag and path.exists() and path.is_file():
+                            self._register_generated_file(path)
+                            self._register_generated_dir(path.parent)
+
+                    def _export_one(path: Path, subs: list[tuple[Path, str]], mode: str) -> tuple[bool, str]:
+                        self.logMessage.emit(
+                            "[INFO] [FFMPEG] "
+                            f"[{name}] mode={mode} fmt={fmt} subtitles={len(subs)} audio_tracks={len(audio_inputs)} "
+                            f"subtitle_convert={subtitle_convert_mode} out={path}"
+                        )
                         if fmt == "mkv":
                             if mode == "container":
-                                done_ok, _ = mux_to_mkv_soft(
+                                done_ok, detail = mux_to_mkv_soft(
                                     ffmpeg,
                                     ivf,
                                     audio_inputs,
@@ -6605,11 +7727,11 @@ class WebBridge(QObject):
                                     default_sub_lang=default_subtitle_lang,
                                     convert_subtitles_to_ass=subtitle_convert_mode == "ass",
                                 )
-                                return done_ok
-                            done_ok, _ = mux_to_mkv(ffmpeg, ivf, audio_inputs, subs, path, convert_subtitles_to_ass=subtitle_convert_mode == "ass")
-                            return done_ok
+                                return done_ok, detail
+                            done_ok, detail = mux_to_mkv(ffmpeg, ivf, audio_inputs, subs, path, convert_subtitles_to_ass=subtitle_convert_mode == "ass")
+                            return done_ok, detail
                         if mode == "container":
-                            done_ok, _ = transcode_ivf_to_mp4_soft(
+                            done_ok, detail = transcode_ivf_to_mp4_soft(
                                 ffmpeg,
                                 ivf,
                                 audio_inputs,
@@ -6618,9 +7740,9 @@ class WebBridge(QObject):
                                 default_sub_lang=default_subtitle_lang,
                                 convert_subtitles_to_ass=subtitle_convert_mode == "ass",
                             )
-                            return done_ok
-                        done_ok, _ = transcode_ivf_to_mp4(ffmpeg, ivf, audio_inputs, subs, path, convert_subtitles_to_ass=subtitle_convert_mode == "ass")
-                        return done_ok
+                            return done_ok, detail
+                        done_ok, detail = transcode_ivf_to_mp4(ffmpeg, ivf, audio_inputs, subs, path, convert_subtitles_to_ass=subtitle_convert_mode == "ass")
+                        return done_ok, detail
 
                     row_export_mode = effective_export_mode
                     # Flag-driven export flow:
@@ -6634,28 +7756,54 @@ class WebBridge(QObject):
 
                     if row_export_mode == "container":
                         out = output_dir / f"{stem}{ext}"
-                        ok = _export_one(out, subtitle_inputs, "container")
+                        self.logMessage.emit(f"[INFO] [{name}] export start -> {out}")
+                        ok, detail = _export_one(out, subtitle_inputs, "container")
+                        if (not ok) and subtitle_inputs:
+                            self.logMessage.emit(f"[WARN] [{name}] container export with subtitles failed, retrying without subtitles: {detail}")
+                            ok, detail = _export_one(out, [], "container")
+                        _mark_output(out, ok)
+                        if not ok and detail:
+                            self.logMessage.emit(f"[ERROR] [{name}] export failed: {detail}")
                     elif row_export_mode == "burn":
                         if subtitle_inputs:
                             ok = True
                             for sub_path, lang in subtitle_inputs:
                                 suffix = f"_{lang}" if lang else "_SUB"
                                 out = output_dir / f"{stem}{suffix}{ext}"
-                                one_ok = _export_one(out, [(sub_path, lang)], "burn")
+                                self.logMessage.emit(f"[INFO] [{name}] burn export start ({lang or 'SUB'}) -> {out}")
+                                one_ok, detail = _export_one(out, [(sub_path, lang)], "burn")
+                                _mark_output(out, one_ok)
+                                if not one_ok and detail:
+                                    self.logMessage.emit(f"[ERROR] [{name}] burn export failed ({lang or 'SUB'}): {detail}")
                                 ok = ok and one_ok
                         else:
                             out = output_dir / f"{stem}{ext}"
-                            ok = _export_one(out, [], "container")
+                            self.logMessage.emit(f"[INFO] [{name}] export start (no subtitles) -> {out}")
+                            ok, detail = _export_one(out, [], "container")
+                            _mark_output(out, ok)
+                            if not ok and detail:
+                                self.logMessage.emit(f"[ERROR] [{name}] export failed: {detail}")
                     else:
                         base_out = output_dir / f"{stem}{ext}"
-                        ok_container = _export_one(base_out, subtitle_inputs, "container")
+                        self.logMessage.emit(f"[INFO] [{name}] hybrid container start -> {base_out}")
+                        ok_container, detail = _export_one(base_out, subtitle_inputs, "container")
+                        if (not ok_container) and subtitle_inputs:
+                            self.logMessage.emit(f"[WARN] [{name}] hybrid container leg with subtitles failed, retrying without subtitles: {detail}")
+                            ok_container, detail = _export_one(base_out, [], "container")
+                        _mark_output(base_out, ok_container)
+                        if not ok_container and detail:
+                            self.logMessage.emit(f"[ERROR] [{name}] hybrid container leg failed: {detail}")
                         ok = ok_container
                         if subtitle_inputs and hybrid_hardsub_limit > 0:
                             picked = subtitle_inputs[:hybrid_hardsub_limit]
                             for sub_path, lang in picked:
                                 suffix = f"_{lang}" if lang else "_SUB"
                                 out = output_dir / f"{stem}{suffix}{ext}"
-                                one_ok = _export_one(out, [(sub_path, lang)], "burn")
+                                self.logMessage.emit(f"[INFO] [{name}] hybrid burn start ({lang or 'SUB'}) -> {out}")
+                                one_ok, detail = _export_one(out, [(sub_path, lang)], "burn")
+                                _mark_output(out, one_ok)
+                                if not one_ok and detail:
+                                    self.logMessage.emit(f"[ERROR] [{name}] hybrid burn leg failed ({lang or 'SUB'}): {detail}")
                                 ok = ok and one_ok
 
                 done += 1
@@ -6713,10 +7861,21 @@ class WebBridge(QObject):
         supported_video_exts = {".ivf", ".264", ".h264", ".m1v"}
         all_have_supported_video = True
         default_parent = ""
+
+        def _as_existing_abs_path(text: str) -> Path | None:
+            raw = Path(str(text or "").strip())
+            if not str(raw):
+                return None
+            try:
+                resolved = raw.resolve()
+            except OSError:
+                resolved = raw.absolute()
+            return resolved if resolved.exists() else None
+
         for report in ok_reports:
             video = report.get("video") or {}
             video_text = str(video.get("path") or "").strip()
-            video_path = Path(video_text) if video_text else None
+            video_path = _as_existing_abs_path(video_text) if video_text else None
             if (
                 not video_path
                 or not video_path.exists()
@@ -6738,8 +7897,9 @@ class WebBridge(QObject):
                     info = item if isinstance(item, dict) else {}
                     decode = info.get("decode") if isinstance(info.get("decode"), dict) else {}
                     wav_text = str(decode.get("wav") or "").strip()
-                    if wav_text and Path(wav_text).exists():
-                        wavs.append(wav_text)
+                    wav_path = _as_existing_abs_path(wav_text) if wav_text else None
+                    if wav_path:
+                        wavs.append(str(wav_path))
                         try:
                             ch = int(ch_text)
                         except (TypeError, ValueError):
@@ -6747,7 +7907,7 @@ class WebBridge(QObject):
                         audio_tracks.append(
                             {
                                 "ch": ch,
-                                "wav": wav_text,
+                                "wav": str(wav_path),
                                 "label": self._t(f"video_export_audio_ch{ch}"),
                             }
                         )
@@ -7104,6 +8264,7 @@ class WebBridge(QObject):
                         if report.get("id"):
                             with self._reports_lock:
                                 self._reports_by_id[str(report["id"])] = dict(report)
+                        self._register_report_artifacts(report)
                         reports.append(report)
                         if report["id"]:
                             emit_row_progress(report["id"], path.name, 100)
@@ -7135,6 +8296,7 @@ class WebBridge(QObject):
                     if report.get("id"):
                         with self._reports_lock:
                             self._reports_by_id[str(report["id"])] = dict(report)
+                    self._register_report_artifacts(report)
                     reports.append(report)
                     if report["id"]:
                         emit_row_progress(report["id"], path.name, 100)
@@ -7278,16 +8440,28 @@ def _report_detail_lines(report: dict) -> list[str]:
 
 def main() -> int:
     app = QApplication([])
-    view = QWebEngineView()
+    global QT_DIALOG_FONT_FAMILY
+    QT_DIALOG_FONT_FAMILY = _load_qt_dialog_font(app)
+    bridge = WebBridge()
+    view = _MainView(bridge)
+    bridge.bind_view(view)
+
+    if APP_ICON_PATH.exists():
+        app_icon = QIcon(str(APP_ICON_PATH))
+        if not app_icon.isNull():
+            app.setWindowIcon(app_icon)
+            view.setWindowIcon(app_icon)
+
     view.setWindowTitle(_t(DEFAULT_LANGUAGE, "app_title"))
     view.setFixedSize(1180, 850)
+    view._apply_rounded_mask()
 
-    bridge = WebBridge()
     channel = QWebChannel(view.page())
     channel.registerObject("bridge", bridge)
     view.page().setWebChannel(channel)
 
     bridge.windowTitleChanged.connect(view.setWindowTitle)
+    bridge.hostCloseRequested.connect(view.close)
 
     html = _render_html()
     # Use local workspace root as base URL so relative asset paths can be loaded.
