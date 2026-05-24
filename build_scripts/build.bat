@@ -33,11 +33,12 @@ echo [INFO] Building UsmDiviner for Windows...
 echo [INFO] Spec file: %SPEC_FILE%
 echo [INFO] Output dir: %DIST_DIR%
 
-REM Run PyInstaller
+REM Run PyInstaller from project root so spec file can locate resources
+cd /d "%PROJECT_ROOT%"
 python -m PyInstaller -y ^
     --distpath "%DIST_DIR%" ^
     --workpath "%BUILD_DIR%" ^
-    "%SPEC_FILE%"
+    "build_scripts\UsmDiviner.spec"
 
 if errorlevel 1 (
     echo [ERROR] Build failed!

@@ -1,17 +1,25 @@
 # -*- mode: python ; coding: utf-8 -*-
 # PyInstaller spec file for cross-platform UsmDiviner packaging
 # Usage:
-#   Windows:   pyinstaller -y build_scripts/UsmDiviner.spec
-#   macOS:     pyinstaller -y build_scripts/UsmDiviner.spec
-#   Linux:     pyinstaller -y build_scripts/UsmDiviner.spec
+#   cd /path/to/UsmDiviner
+#   pyinstaller -y build_scripts/UsmDiviner.spec
 
 import sys
+import os
 from pathlib import Path
 
 block_cipher = None
 
-# Determine project root
-PROJECT_ROOT = Path(__file__).parent.parent
+# Get project root: pyinstaller is run from project root
+# so os.getcwd() should be the project directory
+PROJECT_ROOT = Path(os.getcwd())
+
+# Verify we're in the right directory
+if not (PROJECT_ROOT / "usmdiviner").exists():
+    raise RuntimeError(
+        f"Error: usmdiviner/ not found in {PROJECT_ROOT}. "
+        "Please run pyinstaller from project root."
+    )
 
 # Define entry point (GUI)
 ENTRY_POINT = str(PROJECT_ROOT / "usmdiviner" / "__main__.py")

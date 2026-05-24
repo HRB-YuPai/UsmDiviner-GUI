@@ -67,7 +67,9 @@ def build_for_platform(platform_name: str = None, clean: bool = False) -> int:
     ]
     
     print(f"[INFO] Running: {' '.join(cmd)}")
-    result = subprocess.run(cmd)
+    
+    # IMPORTANT: Run from project root so spec file can find resources
+    result = subprocess.run(cmd, cwd=str(root))
     
     if result.returncode == 0:
         print(f"[OK] Build successful!")

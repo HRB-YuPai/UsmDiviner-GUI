@@ -69,11 +69,14 @@ if [ "$CLEAN_BUILD" = "1" ]; then
     rm -rf "$BUILD_DIR"
 fi
 
+# Run PyInstaller from project root so spec file can locate resources
+cd "$PROJECT_ROOT"
+
 # Run PyInstaller
 python3 -m PyInstaller -y \
     --distpath "$DIST_DIR" \
     --workpath "$BUILD_DIR" \
-    "$SPEC_FILE"
+    "build_scripts/UsmDiviner.spec"
 
 if [ $? -ne 0 ]; then
     echo "[ERROR] Build failed!"
