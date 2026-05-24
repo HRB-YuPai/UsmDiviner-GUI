@@ -24,14 +24,18 @@ if not (PROJECT_ROOT / "usmdiviner").exists():
 # Define entry point (GUI)
 ENTRY_POINT = str(PROJECT_ROOT / "usmdiviner" / "__main__.py")
 
+# Build data files list - only include directories that exist
+datas = []
+if (PROJECT_ROOT / "assets").exists():
+    datas.append((str(PROJECT_ROOT / "assets"), "assets"))
+if (PROJECT_ROOT / "vgmstream").exists():
+    datas.append((str(PROJECT_ROOT / "vgmstream"), "vgmstream"))
+
 a = Analysis(
     [ENTRY_POINT],
     pathex=[str(PROJECT_ROOT)],
     binaries=[],
-    datas=[
-        (str(PROJECT_ROOT / "assets"), "assets"),  # Bundle all assets (fonts, i18n, icons)
-        (str(PROJECT_ROOT / "vgmstream"), "vgmstream"),  # Optional: bundle vgmstream binaries
-    ],
+    datas=datas,
     hiddenimports=[
         "PyQt5.QtCore",
         "PyQt5.QtGui",
