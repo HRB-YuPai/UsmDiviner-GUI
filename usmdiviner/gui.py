@@ -85,7 +85,7 @@ def _t(lang: str, key: str, **kwargs) -> str:
     return text.format(**kwargs) if kwargs else text
 
 
-HTML_TEMPLATE = """<!doctype html>
+HTML_TEMPLATE = r"""<!doctype html>
 <html lang="en">
 <head>
     <meta charset="utf-8" />
