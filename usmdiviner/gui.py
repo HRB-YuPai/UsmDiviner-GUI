@@ -30,13 +30,14 @@ from .processor import process_one
 from .tools import find_ffmpeg, find_vgmstream
 from .tools import mux_to_mkv, mux_to_mkv_soft, transcode_ivf_to_mp4, transcode_ivf_to_mp4_soft
 from .usm import collect_usm_inputs
+from .path_utils import get_resource_path, get_user_data_path, get_external_tool_path
 
 logger = logging.getLogger(__name__)
 DEFAULT_LANGUAGE = "zh-CN"
-ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
-LANG_DIR = ASSETS_DIR / "i18n"
-FONT_PATH = ASSETS_DIR / "fonts" / "zh-cn.ttf"
-APP_ICON_PATH = ASSETS_DIR / "icon" / "wolf_favicon.png"
+ASSETS_DIR = get_resource_path("assets")
+LANG_DIR = get_resource_path("assets/i18n")
+FONT_PATH = get_resource_path("assets/fonts/zh-cn.ttf")
+APP_ICON_PATH = get_resource_path("assets/icon/wolf_favicon.png")
 SUPPORTED_LANGUAGES = ("zh-CN", "zh-TW", "en")
 SUBTITLE_LANG_CODES = (
     "CHS",
@@ -57,16 +58,16 @@ SUBTITLE_LANG_CODES = (
 )
 ONLINE_SUBTITLE_RAW_URL = "https://gitlab.com/Dimbreath/AnimeGameData/-/raw/master/Subtitle/{lang}/{name}.srt"
 SYNC_TEMPLATE_CANDIDATES = (
-    ASSETS_DIR / "usm_template" / "versions_template.json",
-    ASSETS_DIR / "versions_reference.json",
-    ASSETS_DIR / "versions_template.json",
-    ASSETS_DIR / "key_template_versions.json",
-    Path.cwd() / "versions_reference.json",
-    Path.cwd() / "versions_template.json",
+    get_resource_path("assets/usm_template/versions_template.json"),
+    get_resource_path("assets/versions_reference.json"),
+    get_resource_path("assets/versions_template.json"),
+    get_resource_path("assets/key_template_versions.json"),
+    get_user_data_path() / "versions_reference.json",
+    get_user_data_path() / "versions_template.json",
 )
 USM_KEY_INCREMENT_CANDIDATES = (
-    Path.cwd() / "usm_key_increment.json",
-    ASSETS_DIR / "usm_template" / "usm_key_increment.json",
+    get_user_data_path() / "usm_key_increment.json",
+    get_resource_path("assets/usm_template/usm_key_increment.json"),
 )
 
 

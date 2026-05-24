@@ -12,6 +12,7 @@ from pathlib import Path
 
 from .exceptions import ExternalToolError
 from .keys import full_key_int
+from .path_utils import get_resource_path
 
 logger = logging.getLogger(__name__)
 
@@ -38,8 +39,7 @@ _SRT_TIME_RE = re.compile(
 
 
 def _subtitle_font_file() -> Path | None:
-    base = Path(__file__).resolve().parent.parent
-    candidate = base / "assets" / "fonts" / "zh-cn.ttf"
+    candidate = get_resource_path("assets/fonts/zh-cn.ttf")
     if candidate.is_file():
         return candidate
     return None
