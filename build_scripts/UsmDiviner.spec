@@ -21,8 +21,9 @@ if not (PROJECT_ROOT / "usmdiviner").exists():
         "Please run pyinstaller from project root."
     )
 
-# Define entry point (GUI)
-ENTRY_POINT = str(PROJECT_ROOT / "usmdiviner" / "__main__.py")
+# Define entry point (GUI) - use explicit entry script for proper module discovery
+# in PyInstaller packaged mode
+ENTRY_POINT = str(PROJECT_ROOT / "__main_entry__.py")
 
 # Build data files list - only include directories that exist
 datas = []
