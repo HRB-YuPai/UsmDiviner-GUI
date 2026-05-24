@@ -1,6 +1,6 @@
 # UsmDiviner GUI
 
-[简体中文](README.zh-CN.md) | [**English**](README.en.md)
+[简体中文](README.md) | [**English**](README.en.md)
 
 ### 1. Overview
 UsmDiviner GUI is a desktop toolchain for **CRI USM** workflows, focused on:
