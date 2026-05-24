@@ -38,8 +38,6 @@ cd /d "%PROJECT_ROOT%"
 python -m PyInstaller -y ^
     --distpath "%DIST_DIR%" ^
     --workpath "%BUILD_DIR%" ^
-    --exclude-module PySide6 ^
-    --exclude-module PySide2 ^
     "build_scripts\UsmDiviner.spec"
 
 if errorlevel 1 (

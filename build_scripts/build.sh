@@ -76,8 +76,6 @@ cd "$PROJECT_ROOT"
 python3 -m PyInstaller -y \
     --distpath "$DIST_DIR" \
     --workpath "$BUILD_DIR" \
-    --exclude-module PySide6 \
-    --exclude-module PySide2 \
     "build_scripts/UsmDiviner.spec"
 
 if [ $? -ne 0 ]; then

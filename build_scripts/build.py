@@ -62,8 +62,6 @@ def build_for_platform(platform_name: str = None, clean: bool = False) -> int:
         "-m", "PyInstaller",
         "--distpath", str(dist_dir),
         "--workpath", str(build_dir),
-        "--exclude-module", "PySide6",
-        "--exclude-module", "PySide2",
         "-y",
         str(spec_file),
     ]
