@@ -3,6 +3,7 @@ __pycache__/
 *.egg-info/
 .venv/
 venv/
+build_env_pyside/
 build/
 dist/
 input/
@@ -10,6 +11,7 @@ output/
 vgmstream-win64/
 .vscode/
 .DS_Store
+usm_key_increment.json
 
 # Keep tool docs, but do not version bundled binaries.
 assets/tools/**

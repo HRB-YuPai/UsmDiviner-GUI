@@ -57,17 +57,29 @@ SUBTITLE_LANG_CODES = (
     "VI",
 )
 ONLINE_SUBTITLE_RAW_URL = "https://gitlab.com/Dimbreath/AnimeGameData/-/raw/master/Subtitle/{lang}/{name}.srt"
-SYNC_TEMPLATE_CANDIDATES = (
-    get_resource_path("assets/usm_template/versions_template.json"),
+SUPPORTED_GAMES: tuple[str, ...] = (
+    "honkai_star_rail",
+    "genshin_impact",
+    "zenless_zone_zero",
+    "honkai_impact_3rd",
+    "petit_planet",
+)
+DEFAULT_GAME = "genshin_impact"
+GENSHIN_GAME_ID = "genshin_impact"
+
+# Backward-compatibility source files used for first-time migration into
+# per-game folders, especially for existing Genshin-only installs.
+LEGACY_SYNC_TEMPLATE_CANDIDATES = (
+    get_resource_path("assets/usm_data/genshin_impact/usm_key_base.json"),
     get_resource_path("assets/versions_reference.json"),
-    get_resource_path("assets/versions_template.json"),
+    get_resource_path("assets/usm_key_base.json"),
     get_resource_path("assets/key_template_versions.json"),
     get_user_data_path() / "versions_reference.json",
-    get_user_data_path() / "versions_template.json",
+    get_user_data_path() / "usm_key_base.json",
 )
-USM_KEY_INCREMENT_CANDIDATES = (
-    get_user_data_path() / "usm_key_increment.json",
-    get_resource_path("assets/usm_template/usm_key_increment.json"),
+LEGACY_USM_KEY_INCREMENT_CANDIDATES = (
+    get_user_data_path() / "usm_data/usm_key_increment.json",
+    get_resource_path("assets/usm_data/genshin_impact/usm_key_increment.json"),
 )
 
 
@@ -183,6 +195,13 @@ HTML_TEMPLATE = r"""<!doctype html>
             box-sizing: border-box;
         }
 
+        /* Keep text static across pages: no drag-select, no I-beam cursor on non-editable content. */
+        :not(input):not(textarea):not([contenteditable="true"]) {
+            user-select: none;
+            -webkit-user-select: none;
+            cursor: default;
+        }
+
         body {
             margin: 0;
             font-family: "UsmDivinerZh", "Segoe UI", "Noto Sans", "Microsoft YaHei", "PingFang TC", sans-serif;
@@ -279,9 +298,9 @@ HTML_TEMPLATE = r"""<!doctype html>
         }
 
         #title_icon {
-            width: 34px;
-            height: 34px;
-            flex: 0 0 34px;
+            width: 42px;
+            height: 42px;
+            flex: 0 0 42px;
             border-radius: 7px;
         }
 
@@ -324,12 +343,28 @@ HTML_TEMPLATE = r"""<!doctype html>
             font-size: 22px;
             line-height: 1.1;
             letter-spacing: 0.2px;
+            cursor: default;
+            user-select: none;
+            -webkit-user-select: none;
         }
 
         .sub {
             margin-top: 2px;
             color: var(--muted);
             font-size: 11px;
+            cursor: default;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        label {
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        button {
+            user-select: none;
+            -webkit-user-select: none;
         }
 
         .toolbar-controls {
@@ -370,6 +405,12 @@ HTML_TEMPLATE = r"""<!doctype html>
         .select-shell {
             position: relative;
             width: 100%;
+        }
+
+        .select-shell,
+        .select-shell * {
+            user-select: none;
+            -webkit-user-select: none;
         }
 
         .select-trigger {
@@ -604,6 +645,9 @@ HTML_TEMPLATE = r"""<!doctype html>
             max-width: min(560px, 100%);
             overflow: hidden;
             text-overflow: ellipsis;
+            cursor: default;
+            user-select: none;
+            -webkit-user-select: none;
         }
 
         .status-strip strong {
@@ -658,6 +702,26 @@ HTML_TEMPLATE = r"""<!doctype html>
             font-size: 12px;
             white-space: nowrap;
             min-width: max-content;
+        }
+
+        .game-warning-box {
+            width: 100%;
+            padding: 6px 10px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: linear-gradient(180deg, var(--panel0), var(--panel1));
+            color: #d04040;
+            font-size: 16px;
+            font-weight: 700;
+            line-height: 1.3;
+            cursor: default;
+            user-select: none;
+            -webkit-user-select: none;
+            white-space: normal;
+        }
+
+        .game-warning-standalone {
+            padding: 10px 14px 0;
         }
 
         .row {
@@ -1837,6 +1901,21 @@ HTML_TEMPLATE = r"""<!doctype html>
             outline: none;
         }
 
+        #input_selection_modal .modal-card {
+            width: min(840px, 94vw);
+            height: min(430px, 56vh);
+        }
+
+        #input_selection_modal .save-success-body {
+            flex: 1;
+            min-height: 0;
+        }
+
+        #input_selection_list {
+            flex: 1;
+            min-height: 240px;
+        }
+
         .usage-card {
             width: min(980px, 95vw);
             height: min(680px, 88vh);
@@ -2110,12 +2189,19 @@ HTML_TEMPLATE = r"""<!doctype html>
             font-size: 11px;
             text-align: center;
             white-space: nowrap;
+            word-break: normal;
             pointer-events: none;
             opacity: 1;
             visibility: visible;
             z-index: 100;
             box-shadow: 0 4px 12px #00000044;
             animation: tooltipFadeIn 150ms ease;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        #input.clickable {
+            cursor: default;
         }
 
         @keyframes tooltipFadeIn {
@@ -2332,8 +2418,8 @@ HTML_TEMPLATE = r"""<!doctype html>
                     <span class="window-title-text" id="window_title_text">UsmDiviner GUI</span>
                 </div>
                 <div class="window-title-actions">
-                    <button type="button" class="window-btn" id="window_min_btn" onclick="windowMinimize()" title="Minimize" aria-label="Minimize">-</button>
-                    <button type="button" class="window-btn window-btn-close" id="window_close_btn" onclick="windowClose()" title="Close" aria-label="Close">x</button>
+                    <button type="button" class="window-btn" id="window_min_btn" onclick="windowMinimize()" aria-label="Minimize">-</button>
+                    <button type="button" class="window-btn window-btn-close" id="window_close_btn" onclick="windowClose()" aria-label="Close">x</button>
                 </div>
             </div>
             <div class="head">
@@ -2342,10 +2428,20 @@ HTML_TEMPLATE = r"""<!doctype html>
                         <img class="app-icon" id="title_icon" src="assets/icon/wolf_favicon.png" alt="App icon" onerror="this.style.display='none'" />
                         <div class="brand-text">
                             <h1 class="title" id="title_text">UsmDiviner GUI</h1>
-                            <div class="sub" id="subtitle_text">USM key recovery, extraction, post-export video workflow, and BLB versions viewer</div>
+                            <div class="sub" id="subtitle_text">USM key recovery and extraction with MHY multi-game support</div>
                         </div>
                     </div>
                     <div class="toolbar-controls">
+                        <div class="control">
+                            <label for="game_select" id="game_label_text">Game</label>
+                            <select id="game_select" onchange="setGame(this.value)">
+                                <option id="game_opt_genshin_impact" value="genshin_impact" selected>Genshin Impact</option>
+                                <option id="game_opt_honkai_star_rail" value="honkai_star_rail">Honkai: Star Rail</option>
+                                <option id="game_opt_zenless_zone_zero" value="zenless_zone_zero">Zenless Zone Zero</option>
+                                <option id="game_opt_honkai_impact_3rd" value="honkai_impact_3rd">Honkai Impact 3rd</option>
+                                <option id="game_opt_petit_planet" value="petit_planet">Petit Planet</option>
+                            </select>
+                        </div>
                         <div class="control">
                             <label for="lang_select" id="lang_label_text">Language</label>
                             <select id="lang_select" onchange="setLanguage(this.value)">
@@ -2364,6 +2460,9 @@ HTML_TEMPLATE = r"""<!doctype html>
                     </div>
                 </div>
             </div>
+            <div class="game-warning-standalone">
+                <div class="game-warning-box" id="game_warning_text">Safety warning</div>
+            </div>
             <div class="grid">
                 <div class="top-pane">
                     <div class="form-block">
@@ -2378,7 +2477,7 @@ HTML_TEMPLATE = r"""<!doctype html>
                                     <span id="batch_folder_text" class="mode-toggle-text mode-toggle-text-batch">Folder selection</span>
                                 </button>
                             </div>
-                            <div class="mode-inline">
+                            <div class="mode-inline hidden" id="blk_parse_mode_row">
                                 <label id="blk_parse_mode_text" for="blk_parse_toggle">Parse blk</label>
                                 <label class="toggle-switch" id="blk_parse_toggle_shell" data-tooltip="原神 26236578.blk 解析">
                                     <input type="checkbox" id="blk_parse_toggle" onchange="syncBlkParseToggle()" />
@@ -2388,9 +2487,9 @@ HTML_TEMPLATE = r"""<!doctype html>
                         </div>
                         <div class="form-cols">
                             <div class="form-col">
-                                <div class="row">
+                                <div class="row" id="input_row">
                                     <label id="input_label" for="input">Input</label>
-                                    <input id="input" type="text" placeholder="" readonly />
+                                    <input id="input" type="text" placeholder="" readonly onclick="openInputSelectionModal()" onkeydown="handleInputSelectionKeydown(event)" />
                                     <button class="btn" id="input_pick_btn" data-tooltip="Browse to select input" onclick="pickInput()">Browse</button>
                                 </div>
                                 <div class="row hidden" id="output_row">
@@ -2480,6 +2579,7 @@ HTML_TEMPLATE = r"""<!doctype html>
                     <button class="btn hidden" id="open_video_export_btn" data-tooltip="Export videos from extracted IVF/WAV" onclick="openVideoExportModal()">Export Video</button>
                     <button class="btn hidden" id="export_all_reports_btn" data-tooltip="Export all reports" onclick="exportAllReports()">Export All Reports</button>
                     <button class="btn hidden" id="export_index_btn" data-tooltip="Export processed index JSON" onclick="exportIndexJson()">Export Index</button>
+                    <button class="btn" id="export_game_keys_btn" data-tooltip="Export merged key JSON for selected game" onclick="exportGameKeys()">Export Game Keys</button>
                     <button id="run" class="btn run" data-tooltip="Start extraction" onclick="runTask()">Run</button>
                 </div>
             </div>
@@ -2866,6 +2966,35 @@ HTML_TEMPLATE = r"""<!doctype html>
         </div>
     </div>
 
+    <div id="video_export_subtitle_missing_confirm_modal" class="modal hidden">
+        <div class="modal-card confirm-save-card">
+            <div class="modal-head">
+                <span id="video_export_subtitle_missing_confirm_title">Online Subtitles Not Found</span>
+            </div>
+            <div class="confirm-save-body">
+                <div id="video_export_subtitle_missing_confirm_message" class="confirm-save-message" style="max-height: 300px; overflow-y: auto; white-space: pre-wrap; word-break: break-word;"></div>
+            </div>
+            <div class="modal-actions">
+                <button class="btn" id="video_export_subtitle_missing_confirm_yes_btn" onclick="confirmVideoExportSubtitleMissing()">Continue Export</button>
+                <button class="btn" id="video_export_subtitle_missing_confirm_no_btn" onclick="cancelVideoExportSubtitleMissing()">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="input_selection_modal" class="modal hidden">
+        <div class="modal-card save-success-card">
+            <div class="modal-head">
+                <span id="input_selection_modal_title">Selected USM Files</span>
+            </div>
+            <div class="save-success-body">
+                <textarea id="input_selection_list" class="save-success-path" readonly></textarea>
+            </div>
+            <div class="modal-actions">
+                <button class="btn" id="input_selection_close_btn" onclick="closeInputSelectionModal()">Close</button>
+            </div>
+        </div>
+    </div>
+
     <div id="blk_save_success_modal" class="modal hidden">
         <div class="modal-card save-success-card">
             <div class="modal-head">
@@ -2898,16 +3027,18 @@ HTML_TEMPLATE = r"""<!doctype html>
     </div>
 
     <div id="cleanup_progress_modal" class="modal hidden">
-        <div class="modal-card save-success-card">
+        <div class="modal-card save-success-card" style="max-width: 420px;">
             <div class="modal-head">
                 <span id="cleanup_progress_modal_title">Cleaning generated files...</span>
             </div>
-            <div class="save-success-body">
-                <div id="cleanup_progress_status" class="save-success-message"></div>
-                <div id="cleanup_progress_file" class="save-success-message"></div>
-                <div id="cleanup_progress_rel" class="save-success-message"></div>
-                <div class="progress-wrap" style="margin-top:8px;">
-                    <div class="progress-track"><div id="cleanup_progress_fill" class="progress-fill" style="width:0%;"></div></div>
+            <div class="save-success-body" style="gap: 6px; padding: 12px 14px;">
+                <div style="display: flex; flex-direction: column; gap: 2px; font-size: 12px;">
+                    <div id="cleanup_progress_status" style="color: var(--muted);"></div>
+                    <div id="cleanup_progress_file" style="color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 11px;"></div>
+                </div>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <div class="progress-track" style="flex: 1; height: 6px; margin: 0;"><div id="cleanup_progress_fill" class="progress-fill" style="width: 0%; height: 100%; background: linear-gradient(90deg, var(--acc), #69d89f); transition: width 100ms linear;"></div></div>
+                    <div id="cleanup_progress_percentage" style="color: var(--muted); font-size: 11px; min-width: 36px; text-align: right;">0%</div>
                 </div>
             </div>
         </div>
@@ -2941,6 +3072,7 @@ HTML_TEMPLATE = r"""<!doctype html>
         let videoExportOverallTarget = 0;
         let videoExportOverallLastTick = 0;
         let pendingVideoExportPayload = null;
+        let pendingVideoExportCoveragePayload = null;
         let pendingVideoExportSubtitlePromptInfo = null;
         let progressPumpTimer = null;
         let overallProgressCurrent = 0;
@@ -2961,6 +3093,14 @@ HTML_TEMPLATE = r"""<!doctype html>
 
         function currentLang() {
             return byId("lang_select").value || "zh-CN";
+        }
+
+        function currentGame() {
+            return byId("game_select").value || "genshin_impact";
+        }
+
+        function isGenshinSelected() {
+            return currentGame() === "genshin_impact";
         }
 
         function currentTheme() {
@@ -3151,7 +3291,6 @@ HTML_TEMPLATE = r"""<!doctype html>
             [
                 "video_export_output_pick_btn",
                 "video_export_subtitle_pick_btn",
-                "video_export_start_btn",
                 "video_export_close_btn",
                 "video_export_audio_trigger",
                 "video_export_audio_all_btn",
@@ -3177,6 +3316,17 @@ HTML_TEMPLATE = r"""<!doctype html>
                 const box = byId(`video_export_subtitle_lang_${code}`);
                 if (box) box.disabled = locked;
             }
+
+            updateVideoExportStartButtonState();
+        }
+
+        function updateVideoExportStartButtonState() {
+            const startBtn = byId("video_export_start_btn");
+            if (!startBtn) return;
+            const hasCandidates = Array.isArray(videoExportCandidates) && videoExportCandidates.length > 0;
+            const outputEl = byId("video_export_output");
+            const hasOutput = String((outputEl && outputEl.value) || "").trim().length > 0;
+            startBtn.disabled = !!videoExportRunning || !hasCandidates || !hasOutput;
         }
 
         function updateVideoExportSubtitleLocalInfo() {
@@ -3310,6 +3460,130 @@ HTML_TEMPLATE = r"""<!doctype html>
             videoExportRunning = true;
             setVideoExportUiRunning(true);
             bridge.startVideoExport(JSON.stringify(payload));
+        }
+
+        function proceedVideoExportWithPrompt(payload) {
+            const promptInfo = getVideoExportSubtitlePromptInfo(payload);
+            if (promptInfo) {
+                openVideoExportSubtitleConvertModal(promptInfo, payload);
+                return;
+            }
+            runVideoExportPayload(payload);
+        }
+
+        function maybeCheckVideoExportOnlineSubtitleCoverage(payload) {
+            if (!payload || !bridge || !bridge.checkVideoExportOnlineSubtitleCoverage) {
+                proceedVideoExportWithPrompt(payload);
+                return;
+            }
+            if (payload.online_subtitle_coverage_confirmed) {
+                proceedVideoExportWithPrompt(payload);
+                return;
+            }
+            const isOnline = String(payload.subtitle_source || "off") === "online";
+            const langs = Array.isArray(payload.subtitle_languages) ? payload.subtitle_languages : [];
+            if (!isOnline || langs.length <= 0) {
+                proceedVideoExportWithPrompt(payload);
+                return;
+            }
+            pendingVideoExportCoveragePayload = payload;
+            bridge.checkVideoExportOnlineSubtitleCoverage(JSON.stringify(payload));
+        }
+
+        let pendingVideoExportSubtitleMissingPayload = null;
+        let cleanupProgressModel = { display: 0, target: 0, lastTick: Date.now() };
+        let cleanupProgressPumpTimer = null;
+
+        function _ensureCleanupProgressPump() {
+            if (cleanupProgressPumpTimer !== null) return;
+            cleanupProgressPumpTimer = window.setTimeout(_pumpCleanupProgress, 33);
+        }
+
+        function _pumpCleanupProgress() {
+            cleanupProgressPumpTimer = null;
+            const now = Date.now();
+            const dtSec = Math.max(0.016, Math.min(0.2, (now - (cleanupProgressModel.lastTick || now)) / 1000));
+            const urgency = cleanupProgressModel.target >= 99 ? 3.2 : 1.0;
+            cleanupProgressModel.display = _advanceProgress(
+                Number(cleanupProgressModel.display || 0),
+                Number(cleanupProgressModel.target || 0),
+                dtSec,
+                urgency
+            );
+            cleanupProgressModel.lastTick = now;
+            const fill = byId("cleanup_progress_fill");
+            const pctText = byId("cleanup_progress_percentage");
+            if (fill) fill.style.width = `${cleanupProgressModel.display}%`;
+            if (pctText) pctText.textContent = formatProgressText(cleanupProgressModel.display);
+            if (Math.abs(Number(cleanupProgressModel.target || 0) - cleanupProgressModel.display) >= 0.15) {
+                _ensureCleanupProgressPump();
+            }
+        }
+
+        function onVideoExportSubtitleCoverageReady(payloadJson) {
+            let payload = {};
+            try {
+                payload = JSON.parse(payloadJson || "{}");
+            } catch (_) {
+                payload = {};
+            }
+            const pendingPayload = pendingVideoExportCoveragePayload;
+            pendingVideoExportCoveragePayload = null;
+            if (!pendingPayload) {
+                return;
+            }
+            const missing = Array.isArray(payload.missing_names)
+                ? payload.missing_names.map((x) => String(x || "").trim()).filter(Boolean)
+                : [];
+            const total = Number(payload.total || 0);
+            if (missing.length <= 0) {
+                pendingPayload.online_subtitle_all_missing = false;
+                pendingPayload.online_subtitle_coverage_confirmed = true;
+                proceedVideoExportWithPrompt(pendingPayload);
+                return;
+            }
+            pendingPayload.online_subtitle_all_missing = total > 0 && missing.length >= total;
+
+            const dict = t(currentLang());
+            const preview = missing.slice(0, 12).join("\n");
+            const hidden = Math.max(0, missing.length - 12);
+            const hiddenText = hidden > 0
+                ? `\n${String(dict.video_export_subtitle_online_missing_more || "... and {count} more files").replace("{count}", String(hidden))}`
+                : "";
+            const template = String(
+                dict.video_export_subtitle_online_missing_confirm
+                || "The following files did not match online subtitles ({count}/{total}). Continue export without subtitles for these files?\n\n{files}{more}"
+            );
+            const message = template
+                .replace("{count}", String(missing.length))
+                .replace("{total}", String(total > 0 ? total : missing.length))
+                .replace("{files}", preview)
+                .replace("{more}", hiddenText);
+
+            pendingVideoExportSubtitleMissingPayload = pendingPayload;
+            byId("video_export_subtitle_missing_confirm_title").textContent = dict.video_export_subtitle_online_missing_title || "Online Subtitles Not Found";
+            byId("video_export_subtitle_missing_confirm_message").textContent = message;
+            byId("video_export_subtitle_missing_confirm_modal").classList.remove("hidden");
+        }
+
+        function confirmVideoExportSubtitleMissing() {
+            const payload = pendingVideoExportSubtitleMissingPayload;
+            pendingVideoExportSubtitleMissingPayload = null;
+            byId("video_export_subtitle_missing_confirm_modal").classList.add("hidden");
+            if (!payload) return;
+            payload.online_subtitle_coverage_confirmed = true;
+            if (payload.online_subtitle_all_missing) {
+                const dict = t(currentLang());
+                appendLog(dict.video_export_subtitle_online_all_missing_skip_ass_log || "[INFO] Online subtitles missed for all selected videos; skipping ASS conversion prompt and continuing export without subtitles.");
+                runVideoExportPayload(payload);
+                return;
+            }
+            proceedVideoExportWithPrompt(payload);
+        }
+
+        function cancelVideoExportSubtitleMissing() {
+            pendingVideoExportSubtitleMissingPayload = null;
+            byId("video_export_subtitle_missing_confirm_modal").classList.add("hidden");
         }
 
         function confirmVideoExportSubtitleConversion(mode) {
@@ -3490,6 +3764,53 @@ HTML_TEMPLATE = r"""<!doctype html>
             if (el) el.placeholder = text;
         }
 
+        function updateInputSelectionInteraction() {
+            const input = byId("input");
+            if (!input) return;
+            const isMulti = Array.isArray(selectedInputFiles) && selectedInputFiles.length > 1;
+            input.classList.toggle("clickable", isMulti);
+            if (isMulti) {
+                const dict = t(currentLang());
+                input.setAttribute("aria-label", dict.input_selection_open_hint || "Click to view selected file list");
+            } else {
+                input.removeAttribute("aria-label");
+            }
+        }
+
+        function openInputSelectionModal() {
+            if (!Array.isArray(selectedInputFiles) || selectedInputFiles.length <= 1) return;
+            const list = byId("input_selection_list");
+            if (list) list.value = selectedInputFiles.join("\n");
+            const modal = byId("input_selection_modal");
+            if (modal) modal.classList.remove("hidden");
+        }
+
+        function closeInputSelectionModal() {
+            const modal = byId("input_selection_modal");
+            if (modal) modal.classList.add("hidden");
+        }
+
+        function handleInputSelectionKeydown(event) {
+            if (!event) return;
+            const key = String(event.key || "");
+            if (key === "Enter" || key === " ") {
+                event.preventDefault();
+                openInputSelectionModal();
+            }
+        }
+
+        function setInputSelectionTooltip(text) {
+            const row = byId("input_row");
+            const input = byId("input");
+            if (row) {
+                row.removeAttribute("data-tooltip");
+            }
+            if (input) {
+                input.removeAttribute("title");
+            }
+            updateInputSelectionInteraction();
+        }
+
         function setTooltip(id, text) {
             const el = byId(id);
             if (!el) return;
@@ -3593,7 +3914,7 @@ HTML_TEMPLATE = r"""<!doctype html>
         }
 
         function setupCustomSelects() {
-            ["lang_select", "theme_select", "video_export_format", "video_export_subtitle_source", "video_export_mode"].forEach(setupCustomSelect);
+            ["game_select", "lang_select", "theme_select", "video_export_format", "video_export_subtitle_source", "video_export_mode"].forEach(setupCustomSelect);
         }
 
         function setupVideoExportAudioSelect() {
@@ -4385,7 +4706,13 @@ HTML_TEMPLATE = r"""<!doctype html>
             videoExportOverallLastTick = 0;
             for (const item of videoExportCandidates) {
                 const id = String(item.id || item.name || Math.random());
-                videoExportRows.set(id, { id, progress: 0, status: dict.video_export_status_pending || "Pending" });
+                videoExportRows.set(id, {
+                    id,
+                    progress: 0,
+                    progressTarget: 0,
+                    progressDisplay: 0,
+                    status: dict.video_export_status_pending || "Pending",
+                });
                 videoExportProgressModel.set(id, { display: 0, target: 0, lastTick: Date.now() });
                 const tr = document.createElement("tr");
                 tr.id = `video_export_row_${id}`;
@@ -4418,15 +4745,20 @@ HTML_TEMPLATE = r"""<!doctype html>
             let pendingRows = false;
 
             videoExportRows.forEach((row, id) => {
-                const model = videoExportProgressModel.get(id) || { display: Number(row.progress || 0), target: Number(row.progress || 0), lastTick: now };
+                const model = videoExportProgressModel.get(id) || {
+                    display: Number(row.progress || 0),
+                    target: Number(row.progressTarget || row.progress || 0),
+                    lastTick: now,
+                };
                 const dtSec = Math.max(0.016, Math.min(0.2, (now - (model.lastTick || now)) / 1000));
-                const urgency = model.target >= 99 ? 3.0 : 1.15;
+                const urgency = model.target >= 99 ? 3.2 : 1.0;
                 const next = _advanceProgress(Number(model.display || 0), Number(model.target || 0), dtSec, urgency);
                 model.display = next;
                 model.lastTick = now;
                 videoExportProgressModel.set(id, model);
 
-                row.progress = next;
+                row.progressDisplay = next;
+                row.progress = Number(model.target || 0);
                 videoExportRows.set(id, row);
                 const fill = byId(`video_export_fill_${id}`);
                 const text = byId(`video_export_text_${id}`);
@@ -4438,7 +4770,7 @@ HTML_TEMPLATE = r"""<!doctype html>
 
             const dtOverall = Math.max(0.016, Math.min(0.2, (now - (videoExportOverallLastTick || now)) / 1000));
             videoExportOverallLastTick = now;
-            const overallUrgency = videoExportOverallTarget >= 99 ? 3.1 : 1.25;
+            const overallUrgency = videoExportOverallTarget >= 99 ? 3.0 : 1.25;
             videoExportOverallCurrent = _advanceProgress(videoExportOverallCurrent, videoExportOverallTarget, dtOverall, overallUrgency);
 
             const fill = byId("video_export_overall_fill");
@@ -4453,23 +4785,12 @@ HTML_TEMPLATE = r"""<!doctype html>
         }
 
         function setVideoExportOverallProgress(done, total) {
-            const t = Math.max(1, Number(total || 1));
+            const t = Math.max(0, Number(total || 0));
             const d = Math.max(0, Math.min(t, Number(done || 0)));
-            const byDone = (d * 100) / t;
-
-            let rowAvg = 0;
-            let count = 0;
-            videoExportRows.forEach((row) => {
-                rowAvg += Math.max(0, Math.min(100, Number(row.progress || 0)));
-                count += 1;
-            });
-            if (count > 0) rowAvg /= count;
-
-            let target = Math.max(byDone, rowAvg * 0.92);
-            if (videoExportRunning && target >= 99.5) {
-                target = 99;
+            videoExportOverallTarget = t > 0 ? (d * 100) / t : 0;
+            if (videoExportOverallTarget < 100) {
+                videoExportOverallTarget = Math.max(videoExportOverallCurrent, videoExportOverallTarget);
             }
-            videoExportOverallTarget = Math.max(videoExportOverallCurrent, Math.min(100, target));
             _ensureVideoExportPump();
         }
 
@@ -4477,11 +4798,13 @@ HTML_TEMPLATE = r"""<!doctype html>
             const value = Math.max(0, Math.min(100, Number(progress || 0)));
             const statusEl = byId(`video_export_status_${id}`);
             const dict = t(currentLang());
-            const row = videoExportRows.get(id) || { id, progress: 0, status: dict.video_export_status_pending || "Pending" };
+            const row = videoExportRows.get(id) || { id, progress: 0, progressDisplay: 0, status: dict.video_export_status_pending || "Pending" };
+            row.progressTarget = value;
             const model = videoExportProgressModel.get(id) || { display: Number(row.progress || 0), target: 0, lastTick: Date.now() };
             model.target = value >= 100 ? 100 : Math.max(Number(model.target || 0), value);
             videoExportProgressModel.set(id, model);
-            row.progress = Number(model.display || 0);
+            row.progress = Number(model.target || 0);
+            row.progressDisplay = Number(model.display || 0);
             videoExportRows.set(id, row);
 
             if (statusEl && status) {
@@ -4550,12 +4873,7 @@ HTML_TEMPLATE = r"""<!doctype html>
                 showCopyToast(t(currentLang()).video_export_output_required || "");
                 return;
             }
-            const promptInfo = getVideoExportSubtitlePromptInfo(payload);
-            if (promptInfo) {
-                openVideoExportSubtitleConvertModal(promptInfo, payload);
-                return;
-            }
-            runVideoExportPayload(payload);
+            maybeCheckVideoExportOnlineSubtitleCoverage(payload);
         }
 
         function onVideoExportReady(payloadJson) {
@@ -4567,9 +4885,8 @@ HTML_TEMPLATE = r"""<!doctype html>
             }
             const hadCandidates = Array.isArray(videoExportCandidates) && videoExportCandidates.length > 0;
             videoExportCandidates = Array.isArray(payload.candidates) ? payload.candidates : [];
-            const out = String(payload.default_output_dir || "");
-            if (byId("video_export_output") && out) {
-                byId("video_export_output").value = out;
+            if (byId("video_export_output")) {
+                byId("video_export_output").value = "";
             }
             if (!hadCandidates) {
                 if (byId("video_export_audio_ch0")) byId("video_export_audio_ch0").checked = true;
@@ -4594,6 +4911,7 @@ HTML_TEMPLATE = r"""<!doctype html>
             refreshVideoExportAudioSummary();
             refreshVideoExportSubtitleLangSummary();
             updateVideoExportCapabilityUi();
+            updateVideoExportStartButtonState();
             renderVideoExportButton();
         }
 
@@ -4644,6 +4962,13 @@ HTML_TEMPLATE = r"""<!doctype html>
             setText("window_title_text", dict.app_title);
             setText("title_text", dict.app_title);
             setText("subtitle_text", dict.app_subtitle);
+            setText("game_label_text", dict.game_label || "Game");
+            setText("game_opt_honkai_star_rail", dict.game_opt_honkai_star_rail || "Honkai: Star Rail");
+            setText("game_opt_genshin_impact", dict.game_opt_genshin_impact || "Genshin Impact");
+            setText("game_opt_zenless_zone_zero", dict.game_opt_zenless_zone_zero || "Zenless Zone Zero");
+            setText("game_opt_honkai_impact_3rd", dict.game_opt_honkai_impact_3rd || "Honkai Impact 3rd");
+            setText("game_opt_petit_planet", dict.game_opt_petit_planet || "Petit Planet");
+            setText("game_warning_text", dict.game_warning_text || "Please ensure imported USM files belong to the selected game.");
             setText("lang_label_text", dict.lang_label);
             setText("lang_opt_zh_cn", dict.lang_zh_cn);
             setText("lang_opt_zh_tw", dict.lang_zh_tw);
@@ -4691,6 +5016,7 @@ HTML_TEMPLATE = r"""<!doctype html>
             setText("open_video_export_btn", dict.export_video || "Export Video");
             setText("export_all_reports_btn", dict.export_all_reports || "Export All Reports");
             setText("log_window_title", dict.log_window);
+            setText("export_game_keys_btn", dict.export_game_keys || "Export Game Keys");
             setText("copy_log_btn", dict.copy_log || dict.blk_versions_copy || "Copy");
             setText("export_log_btn", dict.export_log);
             setText("clear_log_btn", dict.clear_log);
@@ -4728,6 +5054,11 @@ HTML_TEMPLATE = r"""<!doctype html>
             setText("video_export_subtitle_convert_yes_btn", dict.video_export_subtitle_convert_yes || "Convert to ASS");
             setText("video_export_subtitle_convert_no_btn", dict.video_export_subtitle_convert_no || "Use Original");
             setText("video_export_subtitle_convert_cancel_btn", dict.settings_cancel || "Cancel");
+            setText("video_export_subtitle_missing_confirm_title", dict.video_export_subtitle_online_missing_title || "Online Subtitles Not Found");
+            setText("video_export_subtitle_missing_confirm_yes_btn", dict.video_export_subtitle_online_missing_continue || "Continue Export");
+            setText("video_export_subtitle_missing_confirm_no_btn", dict.video_export_subtitle_online_missing_cancel || dict.settings_cancel || "Cancel");
+            setText("input_selection_modal_title", dict.input_selection_modal_title || "Selected USM Files");
+            setText("input_selection_close_btn", dict.close || "Close");
             setText("blk_save_success_title", dict.blk_versions_saved_title || dict.blk_versions_title);
             setText("blk_save_reveal_btn", dict.blk_versions_saved_reveal || dict.browse);
             setText("blk_save_success_ok_btn", dict.settings_ok || "OK");
@@ -4814,6 +5145,7 @@ HTML_TEMPLATE = r"""<!doctype html>
             setTooltip("open_video_export_btn", dict.btn_export_video_tooltip || dict.export_video);
             setTooltip("export_all_reports_btn", dict.btn_export_all_reports_tooltip || dict.export_all_reports);
             setTooltip("export_index_btn", dict.btn_export_index_tooltip || dict.export_index);
+            setTooltip("export_game_keys_btn", dict.btn_export_game_keys_tooltip || dict.export_game_keys || "Export Game Keys");
             setTooltip("run", dict.btn_run_tooltip);
             setTooltip("export_log_btn", dict.btn_export_log_tooltip);
             setTooltip("copy_log_btn", dict.btn_copy_log_tooltip || dict.blk_versions_copy || "Copy");
@@ -4825,6 +5157,11 @@ HTML_TEMPLATE = r"""<!doctype html>
             setTooltip("blk_versions_save_btn", dict.btn_blk_versions_save_tooltip || dict.save_report_tooltip);
             setTooltip("blk_versions_sync_btn", dict.btn_blk_versions_sync_tooltip);
             setTooltip("blk_versions_close_btn", dict.btn_blk_versions_close_tooltip);
+            // Keep window control buttons free of browser-native title tooltips.
+            const minBtn = byId("window_min_btn");
+            const closeBtn = byId("window_close_btn");
+            if (minBtn) minBtn.removeAttribute("title");
+            if (closeBtn) closeBtn.removeAttribute("title");
             byId("open_settings_btn").textContent = dict.settings_title;
             byId("open_log_btn").textContent = dict.open_log;
             byId("open_video_export_btn").textContent = dict.export_video || "Export Video";
@@ -4841,6 +5178,8 @@ HTML_TEMPLATE = r"""<!doctype html>
             document.getElementById("opt_manual_key_tooltip").textContent = dict.opt_manual_key_tooltip;
             if (selectedInputFiles.length > 0) {
                 applyInputSelection(selectedInputFiles, "");
+            } else {
+                updateInputSelectionInteraction();
             }
             refreshContextMenuLanguage();
             refreshAllCustomSelects();
@@ -4851,6 +5190,7 @@ HTML_TEMPLATE = r"""<!doctype html>
             syncInputMode(true);
             syncRules();
             updateManualKeyVisibility();
+            updateGameAwareUi(false);
             renderBlkStatus();
             renderBlkModal();
             updateBlkSearchStatus();
@@ -4941,6 +5281,11 @@ HTML_TEMPLATE = r"""<!doctype html>
             bridge.exportAllReports();
         }
 
+        function exportGameKeys() {
+            if (!bridge || !bridge.exportGameKeys) return;
+            bridge.exportGameKeys();
+        }
+
         function openLogModal() {
             byId("log_modal").classList.remove("hidden");
             renderLogBox();
@@ -5024,12 +5369,12 @@ HTML_TEMPLATE = r"""<!doctype html>
             const done = Math.max(0, Number(payload.done || 0));
             const total = Math.max(1, Number(payload.total || 1));
             const pct = Math.max(0, Math.min(100, (done * 100) / total));
+            const file = String(payload.file || "").trim();
+            const fileDisplay = file ? ` - ${file}` : "";
             setText("cleanup_progress_modal_title", payload.title || "");
-            setText("cleanup_progress_status", payload.status || "");
-            setText("cleanup_progress_file", payload.file || "");
-            setText("cleanup_progress_rel", payload.relative_path || "");
-            const fill = byId("cleanup_progress_fill");
-            if (fill) fill.style.width = `${pct}%`;
+            setText("cleanup_progress_status", (payload.status || "") + fileDisplay);
+            cleanupProgressModel.target = pct >= 100 ? 100 : Math.max(Number(cleanupProgressModel.target || 0), pct);
+            _ensureCleanupProgressPump();
             if (byId("cleanup_progress_modal").classList.contains("hidden")) {
                 openCleanupProgressModal();
             }
@@ -5106,7 +5451,7 @@ HTML_TEMPLATE = r"""<!doctype html>
                 } else if (el) {
                     selectedInputFiles = [];
                     el.value = text;
-                    el.title = text;
+                    setInputSelectionTooltip(text);
                 }
             } else if (el) {
                 el.value = value;
@@ -5121,6 +5466,9 @@ HTML_TEMPLATE = r"""<!doctype html>
                     videoExportLocalSubtitleFiles = [];
                 }
                 updateVideoExportSubtitleLocalInfo();
+            }
+            if (field === "video_export_output") {
+                updateVideoExportStartButtonState();
             }
             if (field === "input") {
                 previewInput();
@@ -5139,6 +5487,10 @@ HTML_TEMPLATE = r"""<!doctype html>
         function renderBlkStatus() {
             const btn = byId("open_versions_btn");
             if (!btn) return;
+            if (!isGenshinSelected() || !blkParseEnabled) {
+                btn.classList.add("hidden");
+                return;
+            }
             const hasVersions = !!(blkVersionsData && !blkVersionsData.error &&
                 blkVersionsData.versions_json && blkVersionsData.versions_json !== "null");
             if (hasVersions) {
@@ -5489,6 +5841,16 @@ HTML_TEMPLATE = r"""<!doctype html>
         function syncBlkParseToggle(clearExisting = true) {
             const toggle = byId("blk_parse_toggle");
             const row = byId("blk_row");
+            if (!isGenshinSelected()) {
+                if (toggle) toggle.checked = false;
+                blkParseEnabled = false;
+                if (row) row.classList.add("hidden");
+                closeBlkVersionsModal();
+                if (clearExisting) {
+                    resetBlkInputField();
+                }
+                return;
+            }
             blkParseEnabled = !!(toggle && toggle.checked);
             if (row) row.classList.toggle("hidden", !blkParseEnabled);
             if (!blkParseEnabled) {
@@ -5500,6 +5862,15 @@ HTML_TEMPLATE = r"""<!doctype html>
             }
             if (clearExisting) {
                 clearBlkParseState();
+            }
+        }
+
+        function updateGameAwareUi(clearBlkState = true) {
+            const modeRow = byId("blk_parse_mode_row");
+            const allowBlk = isGenshinSelected();
+            if (modeRow) modeRow.classList.toggle("hidden", !allowBlk);
+            if (!allowBlk) {
+                syncBlkParseToggle(clearBlkState);
             }
         }
 
@@ -5522,7 +5893,8 @@ HTML_TEMPLATE = r"""<!doctype html>
             }
             selectedInputFiles = [];
             byId("input").value = "";
-            byId("input").title = "";
+            setInputSelectionTooltip("");
+            closeInputSelectionModal();
             renderFileList([]);
             setOverallProgress(0, 0);
         }
@@ -5543,7 +5915,7 @@ HTML_TEMPLATE = r"""<!doctype html>
             if (!input) return;
             const label = String(displayText || "").trim() || formatInputSelectionLabel(selectedInputFiles);
             input.value = label;
-            input.title = selectedInputFiles.join("\n");
+            setInputSelectionTooltip(selectedInputFiles.join("\n"));
         }
 
         function previewInput() {
@@ -5603,6 +5975,19 @@ HTML_TEMPLATE = r"""<!doctype html>
             applyLanguage(lang);
         }
 
+        function setGame(game) {
+            const select = byId("game_select");
+            const nextGame = String(game || "").trim() || "genshin_impact";
+            if (select) {
+                select.value = nextGame;
+                refreshCustomSelect("game_select");
+            }
+            updateGameAwareUi(true);
+            if (bridge && bridge.setGame) {
+                bridge.setGame(nextGame);
+            }
+        }
+
         function applyTheme(theme) {
             const mode = theme === "light" ? "light" : "dark";
             document.documentElement.setAttribute("data-theme", mode);
@@ -5653,6 +6038,7 @@ HTML_TEMPLATE = r"""<!doctype html>
             const mode = getInputMode();
             const payload = {
                 language: currentLang(),
+                game: currentGame(),
                 input_mode: mode,
                 input: byId("input").value,
                 input_files: mode === "single" ? inputFiles : [],
@@ -5689,6 +6075,7 @@ HTML_TEMPLATE = r"""<!doctype html>
             bridge.videoExportReady.connect(onVideoExportReady);
             bridge.videoExportProgress.connect(onVideoExportProgress);
             bridge.videoExportFinished.connect(onVideoExportFinished);
+            bridge.videoExportSubtitleCoverageReady.connect(onVideoExportSubtitleCoverageReady);
             bridge.runStateChanged.connect(setRunning);
             bridge.exitPromptReady.connect(onExitPromptReady);
             bridge.cleanupProgressReady.connect(onCleanupProgress);
@@ -5708,6 +6095,11 @@ HTML_TEMPLATE = r"""<!doctype html>
             } catch (_) {
                 applyTheme("dark");
             }
+            const game = byId("game_select").value || "genshin_impact";
+            if (bridge.setGame) {
+                bridge.setGame(game);
+            }
+            updateGameAwareUi(false);
             const lang = byId("lang_select").value || "zh-CN";
             bridge.setLanguage(lang);
             applyLanguage(lang);
@@ -6028,6 +6420,7 @@ class WebBridge(QObject):
     videoExportReady = Signal(str)
     videoExportProgress = Signal(str)
     videoExportFinished = Signal(str)
+    videoExportSubtitleCoverageReady = Signal(str)
     runStateChanged = Signal(bool)
     windowTitleChanged = Signal(str)
     fieldChosen = Signal(str, str)
@@ -6055,6 +6448,8 @@ class WebBridge(QObject):
         self._last_blk_result: dict | None = None
         self._language = DEFAULT_LANGUAGE
         self._language_lock = threading.Lock()
+        self._game = DEFAULT_GAME
+        self._game_lock = threading.Lock()
         self._theme = "dark"
         self._theme_lock = threading.Lock()
         self._reports_by_id: dict[str, dict] = {}
@@ -6073,6 +6468,21 @@ class WebBridge(QObject):
         lang = language if language in TRANSLATIONS else DEFAULT_LANGUAGE
         with self._language_lock:
             self._language = lang
+
+    def _normalize_game_id(self, game: str) -> str:
+        normalized = str(game or "").strip().lower()
+        if normalized in SUPPORTED_GAMES:
+            return normalized
+        return DEFAULT_GAME
+
+    def _set_game(self, game: str) -> None:
+        normalized = self._normalize_game_id(game)
+        with self._game_lock:
+            self._game = normalized
+
+    def _get_game(self) -> str:
+        with self._game_lock:
+            return self._game
 
     def _get_language(self) -> str:
         with self._language_lock:
@@ -6127,7 +6537,10 @@ class WebBridge(QObject):
                     continue
                 path_text = str(item.get("path") or "").strip()
                 if path_text:
-                    self._register_generated_file(Path(path_text))
+                    audio_path = Path(path_text)
+                    self._register_generated_file(audio_path)
+                    # Sidecar key files are temporary decode helpers.
+                    self._register_generated_file(audio_path.with_suffix(audio_path.suffix + "key"))
                 decode = item.get("decode") if isinstance(item.get("decode"), dict) else {}
                 wav_text = str(decode.get("wav") or "").strip()
                 if wav_text:
@@ -6149,7 +6562,129 @@ class WebBridge(QObject):
             file_items = [Path(p) for p in sorted(self._generated_files)]
             dir_items = [Path(p) for p in sorted(self._generated_dirs)]
 
-        existing_files = [path for path in file_items if path.exists() and path.is_file()]
+        # Prefer removing generated output folders as complete trees on exit.
+        existing_dirs = [path for path in dir_items if path.exists() and path.is_dir()]
+        cleanup_roots: list[Path] = []
+        for folder in sorted(existing_dirs, key=lambda p: (len(str(p)), str(p))):
+            skip_nested = False
+            for root_dir in cleanup_roots:
+                try:
+                    folder.relative_to(root_dir)
+                    skip_nested = True
+                    break
+                except ValueError:
+                    continue
+            if not skip_nested:
+                cleanup_roots.append(folder)
+
+        if cleanup_roots:
+            root = Path.cwd()
+            removed = 0
+            failed = 0
+            total = len(cleanup_roots)
+            for idx, folder in enumerate(cleanup_roots, 1):
+                try:
+                    relative_path = str(folder.relative_to(root))
+                except ValueError:
+                    relative_path = str(folder)
+
+                if dialog:
+                    dialog.update_step(
+                        self._t("cleanup_dialog_progress", done=idx, total=total),
+                        f"{self._t('cleanup_file_label')} {folder.name}",
+                        f"{self._t('cleanup_relative_path_label')} {relative_path}",
+                        idx - 1,
+                        total,
+                    )
+                if callable(progress_callback):
+                    progress_callback(
+                        self._t("cleanup_dialog_progress", done=idx, total=total),
+                        f"{self._t('cleanup_file_label')} {folder.name}",
+                        f"{self._t('cleanup_relative_path_label')} {relative_path}",
+                        idx - 1,
+                        total,
+                    )
+
+                try:
+                    shutil.rmtree(folder)
+                    removed += 1
+                except OSError:
+                    failed += 1
+
+                if dialog:
+                    dialog.update_step(
+                        self._t("cleanup_dialog_progress", done=idx, total=total),
+                        f"{self._t('cleanup_file_label')} {folder.name}",
+                        f"{self._t('cleanup_relative_path_label')} {relative_path}",
+                        idx,
+                        total,
+                    )
+                if callable(progress_callback):
+                    progress_callback(
+                        self._t("cleanup_dialog_progress", done=idx, total=total),
+                        f"{self._t('cleanup_file_label')} {folder.name}",
+                        f"{self._t('cleanup_relative_path_label')} {relative_path}",
+                        idx,
+                        total,
+                    )
+
+            if dialog:
+                dialog.update_step(
+                    self._t("cleanup_dialog_done", removed=removed, failed=failed),
+                    self._t("cleanup_file_none"),
+                    "",
+                    total,
+                    total,
+                )
+            if callable(progress_callback):
+                progress_callback(
+                    self._t("cleanup_dialog_done", removed=removed, failed=failed),
+                    self._t("cleanup_file_none"),
+                    "",
+                    total,
+                    total,
+                )
+            return
+
+        def _is_intermediate_artifact(path: Path) -> bool:
+            name = path.name.lower()
+            suffix = path.suffix.lower()
+            if name.endswith(".hcakey") or name.endswith(".adxkey"):
+                return True
+            return suffix in {
+                ".ivf",
+                ".264",
+                ".h264",
+                ".m1v",
+                ".hca",
+                ".adx",
+                ".wav",
+            }
+
+        candidate_files: set[Path] = set(path for path in file_items if path.exists() and path.is_file())
+        intermediate_patterns = (
+            "*.hcakey",
+            "*.adxkey",
+            "*.hca",
+            "*.adx",
+            "*.wav",
+            "*.ivf",
+            "*.264",
+            "*.h264",
+            "*.m1v",
+        )
+        for folder in dir_items:
+            if not folder.exists() or not folder.is_dir():
+                continue
+            for pattern in intermediate_patterns:
+                for discovered in folder.rglob(pattern):
+                    if discovered.is_file():
+                        candidate_files.add(discovered)
+
+        existing_files = sorted(
+            [path for path in candidate_files if _is_intermediate_artifact(path)],
+            key=lambda p: str(p),
+        )
         total = len(existing_files)
         if total <= 0:
             if dialog:
@@ -6255,6 +6790,11 @@ class WebBridge(QObject):
     def setLanguage(self, language: str) -> None:
         self._set_language(language)
         self.windowTitleChanged.emit(self._t("app_title"))
+
+    @Slot(str)
+    def setGame(self, game: str) -> None:
+        self._set_game(game)
+        self._ensure_game_key_scaffold()
 
     @Slot(str)
     def setTheme(self, theme: str) -> None:
@@ -6547,8 +7087,70 @@ class WebBridge(QObject):
             versions_list = None
         return versions_list if isinstance(versions_list, list) else None
 
+    def _game_usm_data_dir(self, create: bool = False) -> Path:
+        path = get_user_data_path() / "usm_data" / self._get_game()
+        if create:
+            path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def _game_sync_template_path(self) -> Path:
+        return self._game_usm_data_dir(create=True) / "usm_key_base.json"
+
+    def _game_increment_path(self) -> Path:
+        return self._game_usm_data_dir(create=True) / "usm_key_increment.json"
+
+    def _sync_template_candidates(self) -> tuple[Path, ...]:
+        game = self._get_game()
+        candidates: list[Path] = [
+            self._game_sync_template_path(),
+            get_resource_path(f"assets/usm_data/{game}/usm_key_base.json"),
+        ]
+        if game == GENSHIN_GAME_ID:
+            candidates.extend(LEGACY_SYNC_TEMPLATE_CANDIDATES)
+        return tuple(candidates)
+
+    def _increment_candidates(self) -> tuple[Path, ...]:
+        game = self._get_game()
+        candidates: list[Path] = [
+            self._game_increment_path(),
+            get_resource_path(f"assets/usm_data/{game}/usm_key_increment.json"),
+        ]
+        if game == GENSHIN_GAME_ID:
+            candidates.extend(LEGACY_USM_KEY_INCREMENT_CANDIDATES)
+        return tuple(candidates)
+
+    @staticmethod
+    def _copy_file_if_missing(target: Path, sources: tuple[Path, ...]) -> None:
+        if target.exists():
+            return
+        for source in sources:
+            if not source.exists() or not source.is_file():
+                continue
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, target)
+                return
+            except OSError:
+                continue
+
+    def _ensure_game_key_scaffold(self) -> None:
+        game_dir = self._game_usm_data_dir(create=True)
+        if self._get_game() != GENSHIN_GAME_ID:
+            return
+
+        # Migrate legacy single-game files into per-game folder on first use.
+        self._copy_file_if_missing(
+            game_dir / "usm_key_base.json",
+            LEGACY_SYNC_TEMPLATE_CANDIDATES,
+        )
+        self._copy_file_if_missing(
+            game_dir / "usm_key_increment.json",
+            LEGACY_USM_KEY_INCREMENT_CANDIDATES,
+        )
+
     def _load_versions_template_payload(self) -> tuple[Any | None, str | None]:
-        for template_path in SYNC_TEMPLATE_CANDIDATES:
+        self._ensure_game_key_scaffold()
+        for template_path in self._sync_template_candidates():
             if not template_path.exists() or not template_path.is_file():
                 continue
             try:
@@ -6595,14 +7197,16 @@ class WebBridge(QObject):
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def _load_incremental_key_map(self) -> tuple[dict[str, int], str | None]:
-        for candidate in USM_KEY_INCREMENT_CANDIDATES:
+        self._ensure_game_key_scaffold()
+        for candidate in self._increment_candidates():
             parsed = self._read_usm_key_increment_map(candidate)
             if parsed:
                 return parsed, str(candidate)
         return {}, None
 
     def _resolve_increment_target_path(self) -> Path | None:
-        for candidate in USM_KEY_INCREMENT_CANDIDATES:
+        self._ensure_game_key_scaffold()
+        for candidate in self._increment_candidates():
             try:
                 candidate.parent.mkdir(parents=True, exist_ok=True)
             except OSError:
@@ -6901,26 +7505,46 @@ class WebBridge(QObject):
 
     @Slot(str)
     def revealSavedPath(self, target_path: str) -> None:
-        path = Path(str(target_path or "").strip())
-        if not path.exists():
+        raw_path = str(target_path or "").strip().strip('"').strip("'")
+        path = Path(raw_path).expanduser()
+        try:
+            resolved_path = path.resolve()
+        except OSError:
+            resolved_path = path.absolute()
+
+        if not resolved_path.exists():
             self.uiToast.emit(self._t("blk_versions_reveal_failed"))
             return
         try:
             if sys.platform.startswith("win"):
-                subprocess.Popen(["explorer", f"/select,{path}"])
+                if resolved_path.is_file():
+                    try:
+                        subprocess.Popen(["explorer.exe", "/select,", str(resolved_path)])
+                    except OSError:
+                        subprocess.Popen(["explorer.exe", str(resolved_path.parent)])
+                else:
+                    # Highlight folder in parent explorer view when possible.
+                    if resolved_path.parent != resolved_path:
+                        try:
+                            subprocess.Popen(["explorer.exe", "/select,", str(resolved_path)])
+                        except OSError:
+                            subprocess.Popen(["explorer.exe", str(resolved_path)])
+                    else:
+                        # Drive roots (e.g. J:\) cannot be selected from a parent.
+                        subprocess.Popen(["explorer.exe", str(resolved_path)])
                 return
             if sys.platform == "darwin":
-                subprocess.Popen(["open", "-R", str(path)])
+                subprocess.Popen(["open", "-R", str(resolved_path)])
                 return
             if not self._linux_has_desktop_environment():
                 return
 
-            uri = path.resolve().as_uri()
-            parent = path.resolve().parent
+            uri = resolved_path.as_uri()
+            parent = resolved_path.parent
             for command in (
-                ["nautilus", "--select", str(path)],
-                ["dolphin", "--select", str(path)],
-                ["nemo", str(path)],
+                ["nautilus", "--select", str(resolved_path)],
+                ["dolphin", "--select", str(resolved_path)],
+                ["nemo", str(resolved_path)],
                 [
                     "dbus-send",
                     "--session",
@@ -6944,7 +7568,11 @@ class WebBridge(QObject):
         except OSError:
             self.uiToast.emit(self._t("blk_versions_reveal_failed"))
 
-    def _build_template_key_map(self) -> tuple[dict[str, int], str | None]:
+    def _build_template_key_map(self, fallback_from_blk: dict[str, int] = None) -> tuple[dict[str, int], str | None, str]:
+        """
+        Returns: (key_map, source_path, sync_mode)
+        sync_mode: 'normal', 'increment-only', 'blk-fallback'
+        """
         def add_videos(mapping: dict[str, int], videos: Any, key_val: int | None) -> None:
             if key_val is None or not isinstance(videos, list):
                 return
@@ -6956,8 +7584,11 @@ class WebBridge(QObject):
         incremental_map, incremental_path = self._load_incremental_key_map()
         merged_map: dict[str, int] = dict(incremental_map)
         source_path: str | None = incremental_path
+        sync_mode = "increment-only" if incremental_map else "normal"
 
-        for template_path in SYNC_TEMPLATE_CANDIDATES:
+        found_template = False
+        self._ensure_game_key_scaffold()
+        for template_path in self._sync_template_candidates():
             if not template_path.exists() or not template_path.is_file():
                 continue
             try:
@@ -6988,18 +7619,27 @@ class WebBridge(QObject):
                         add_videos(mapping, group.get("videos"), self._parse_sync_key(group.get("key")))
 
             if mapping:
-                # Current source priority: report rows > incremental map > template map.
+                found_template = True
                 for name, key_val in mapping.items():
                     merged_map.setdefault(name, key_val)
                 if source_path is None:
                     source_path = str(template_path)
                 else:
                     source_path = f"{source_path} + {template_path}"
+                sync_mode = "normal" if incremental_map else "template-only"
                 break
 
+        # If no template and fallback_from_blk is provided, use it as base
+        if not found_template and fallback_from_blk:
+            for name, key_val in fallback_from_blk.items():
+                merged_map.setdefault(name, key_val)
+            source_path = "[BLK parse fallback]"
+            sync_mode = "blk-fallback"
+
         if merged_map:
-            return merged_map, source_path
-        return {}, None
+            return merged_map, source_path, sync_mode
+        return {}, None, sync_mode
+
 
     @Slot(str)
     def syncBlkKeysFromRows(self, rows_json: str) -> None:
@@ -7019,13 +7659,65 @@ class WebBridge(QObject):
         except json.JSONDecodeError:
             rows = []
 
-        name_to_key, template_path = self._build_template_key_map()
-        if template_path:
-            self.logMessage.emit(
-                self._t("blk_sync_template_loaded", path=template_path, count=len(name_to_key))
-            )
+        # Build fallback_from_blk: parse keys from BLK rows if no template exists
+        fallback_from_blk: dict[str, int] = {}
+        for row in rows if isinstance(rows, list) else []:
+            if not isinstance(row, dict):
+                continue
+            key_val = self._parse_sync_key(row.get("usm_decrypt_key"))
+            if key_val is None:
+                key_val = self._parse_sync_key(row.get("genshin_like_key"))
+            if key_val is None:
+                continue
+            row_name = str(row.get("name") or "").strip()
+            row_path = str(row.get("path") or "").strip()
+            candidates: set[str] = set()
+            if row_name:
+                candidates.add(self._norm_video_name(row_name))
+            if row_path:
+                candidates.add(self._norm_video_name(Path(row_path).name))
+                candidates.add(self._norm_video_name(Path(row_path).stem))
+            for c in candidates:
+                if c:
+                    fallback_from_blk[c] = key_val
+
+        name_to_key, template_path, sync_mode = self._build_template_key_map(fallback_from_blk=fallback_from_blk if fallback_from_blk else None)
+        # User notification of sync mode
+        if sync_mode == "blk-fallback":
+            self.logMessage.emit(self._t("blk_sync_template_missing_blk_fallback"))
+            self.uiToast.emit(self._t("blk_sync_template_missing_blk_fallback"))
+        elif sync_mode == "increment-only":
+            self.logMessage.emit(self._t("blk_sync_template_missing_increment_only"))
+            self.uiToast.emit(self._t("blk_sync_template_missing_increment_only"))
+        elif sync_mode == "template-only":
+            self.logMessage.emit(self._t("blk_sync_template_loaded", path=template_path, count=len(name_to_key)))
         else:
-            self.logMessage.emit(self._t("blk_sync_template_missing"))
+            self.logMessage.emit(self._t("blk_sync_template_loaded", path=template_path, count=len(name_to_key)))
+
+        # Apply BLK parse keys as highest priority (overrides template/increment)
+        for row in rows if isinstance(rows, list) else []:
+            if not isinstance(row, dict):
+                continue
+            key_val = self._parse_sync_key(row.get("usm_decrypt_key"))
+            if key_val is None:
+                key_val = self._parse_sync_key(row.get("genshin_like_key"))
+            if key_val is None:
+                continue
+            row_name = str(row.get("name") or "").strip()
+            row_path = str(row.get("path") or "").strip()
+            candidates: set[str] = set()
+            if row_name:
+                candidates.add(self._norm_video_name(row_name))
+            if row_path:
+                candidates.add(self._norm_video_name(Path(row_path).name))
+                candidates.add(self._norm_video_name(Path(row_path).stem))
+            for c in candidates:
+                if c:
+                    name_to_key[c] = key_val
+
+        if not name_to_key:
+            self.logMessage.emit(self._t("blk_sync_no_usm_keys"))
+            return
 
         for row in rows if isinstance(rows, list) else []:
             if not isinstance(row, dict):
@@ -7439,6 +8131,81 @@ class WebBridge(QObject):
         )
 
     @Slot()
+    def exportGameKeys(self) -> None:
+        self._ensure_game_key_scaffold()
+        merged_map, source_path, _ = self._build_template_key_map()
+        if not merged_map:
+            msg = self._t("game_key_export_no_data")
+            self.logMessage.emit(msg)
+            self.indexExportResultReady.emit(
+                json.dumps(
+                    {
+                        "title": self._t("game_key_export_title"),
+                        "message": msg,
+                        "path": "",
+                        "can_reveal": False,
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            return
+
+        game = self._get_game()
+        payload = {
+            "format": "usm_key_merged_v1",
+            "game": game,
+            "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "source": source_path or "",
+            "keys_count": len(merged_map),
+            "keys": {name: merged_map[name] for name in sorted(merged_map)},
+        }
+
+        default_path = str(Path.cwd() / f"{game}_usm_key_merged.json")
+        target_path, _ = QFileDialog.getSaveFileName(
+            None,
+            self._t("select_game_key_save_file"),
+            default_path,
+            "JSON (*.json);;All files (*.*)",
+        )
+        if not target_path:
+            return
+
+        try:
+            Path(target_path).write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            msg = self._t("game_key_export_failed", reason=exc)
+            self.logMessage.emit(msg)
+            self.indexExportResultReady.emit(
+                json.dumps(
+                    {
+                        "title": self._t("game_key_export_title"),
+                        "message": msg,
+                        "path": "",
+                        "can_reveal": False,
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            return
+
+        msg = self._t("game_key_exported", game=game, path=target_path, count=len(merged_map))
+        self.logMessage.emit(msg)
+        self.indexExportResultReady.emit(
+            json.dumps(
+                {
+                    "title": self._t("game_key_export_title"),
+                    "message": msg,
+                    "path": target_path,
+                    "can_reveal": self._can_reveal_saved_path(),
+                },
+                ensure_ascii=False,
+            )
+        )
+
+    @Slot()
     def exportAllReports(self) -> None:
         with self._reports_lock:
             reports = [dict(v) for v in self._reports_by_id.values()]
@@ -7628,6 +8395,50 @@ class WebBridge(QObject):
         )
         self._video_export_worker.start()
 
+    @Slot(str)
+    def checkVideoExportOnlineSubtitleCoverage(self, payload_json: str) -> None:
+        try:
+            payload = json.loads(payload_json or "{}")
+        except json.JSONDecodeError:
+            payload = {}
+
+        subtitle_source = str(payload.get("subtitle_source") or "off").strip().lower()
+        subtitle_languages_raw = payload.get("subtitle_languages") if isinstance(payload.get("subtitle_languages"), list) else []
+        subtitle_languages: list[str] = []
+        for item in subtitle_languages_raw:
+            code = str(item or "").strip().upper()
+            if code in SUBTITLE_LANG_CODES and code not in subtitle_languages:
+                subtitle_languages.append(code)
+        candidates = payload.get("candidates") if isinstance(payload.get("candidates"), list) else []
+
+        missing_names: list[str] = []
+        if subtitle_source == "online" and subtitle_languages and candidates:
+            with tempfile.TemporaryDirectory(prefix="usmdiviner_subtitle_probe_") as tmp:
+                cache_dir = Path(tmp)
+                for item in candidates:
+                    name = str((item or {}).get("name") or "")
+                    ivf_text = str((item or {}).get("ivf") or "")
+                    stem = Path(name).stem or Path(ivf_text).stem
+                    if not stem:
+                        continue
+                    hit = False
+                    for lang in subtitle_languages:
+                        if self._download_online_subtitle(cache_dir, stem, lang):
+                            hit = True
+                            break
+                    if not hit:
+                        missing_names.append(Path(name).name or stem)
+
+        self.videoExportSubtitleCoverageReady.emit(
+            json.dumps(
+                {
+                    "missing_names": missing_names,
+                    "total": len(candidates),
+                },
+                ensure_ascii=False,
+            )
+        )
+
     def _run_video_export_safe(
         self,
         fmt: str,
@@ -7801,21 +8612,26 @@ class WebBridge(QObject):
         failed = 0
         subtitle_miss_count = 0
         subtitle_included_count = 0
-        subtitle_auto_fallback = False
-        mode_auto_downgraded = False
         effective_export_mode = export_mode
-        batch_force_no_subtitles = False
 
         with tempfile.TemporaryDirectory(prefix="usmdiviner_subtitles_") as tmp:
             subtitle_cache_dir = Path(tmp)
             effective_subtitle_source = subtitle_source
 
-            if subtitle_source == "online" and subtitle_languages:
-                if not self._probe_online_subtitle_availability(subtitle_cache_dir, candidates, subtitle_languages):
-                    effective_subtitle_source = "off"
-                    batch_force_no_subtitles = True
-                    subtitle_auto_fallback = True
-                    self.logMessage.emit(self._t("video_export_subtitle_online_unstable"))
+            def _emit_video_progress(row_id: str, progress: int, status_text: str, done_units: float) -> None:
+                safe_progress = int(max(0, min(100, progress)))
+                self.videoExportProgress.emit(
+                    json.dumps(
+                        {
+                            "id": row_id,
+                            "progress": safe_progress,
+                            "status": status_text,
+                            "done": max(0.0, min(float(total), float(done_units))),
+                            "total": total,
+                        },
+                        ensure_ascii=False,
+                    )
+                )
 
             for item in candidates:
                 row_id = str((item or {}).get("id") or "")
@@ -7848,20 +8664,17 @@ class WebBridge(QObject):
                                 audio_inputs.append(Path(wav_text))
 
                 subtitle_inputs: list[tuple[Path, str]] = []
-                # Row-level reset: each file recomputes subtitle hit state.
-                row_force_no_subtitles = batch_force_no_subtitles
-                if not row_force_no_subtitles:
-                    if effective_subtitle_source == "local":
-                        subtitle_inputs = self._collect_local_subtitles_for_video(
-                            subtitle_local_files,
-                            stem,
-                            subtitle_languages,
-                        )
-                    elif effective_subtitle_source == "online" and subtitle_languages:
-                        for lang in subtitle_languages:
-                            sub_path = self._download_online_subtitle(subtitle_cache_dir, stem, lang)
-                            if sub_path:
-                                subtitle_inputs.append((sub_path, lang))
+                if effective_subtitle_source == "local":
+                    subtitle_inputs = self._collect_local_subtitles_for_video(
+                        subtitle_local_files,
+                        stem,
+                        subtitle_languages,
+                    )
+                elif effective_subtitle_source == "online" and subtitle_languages:
+                    for lang in subtitle_languages:
+                        sub_path = self._download_online_subtitle(subtitle_cache_dir, stem, lang)
+                        if sub_path:
+                            subtitle_inputs.append((sub_path, lang))
 
                 subtitle_hit = bool(subtitle_inputs)
 
@@ -7871,17 +8684,17 @@ class WebBridge(QObject):
                     else:
                         subtitle_miss_count += 1
 
-                self.videoExportProgress.emit(
-                    json.dumps(
-                        {
-                            "id": row_id,
-                            "progress": 10,
-                            "status": self._t("video_export_status_running"),
-                            "done": done,
-                            "total": total,
-                        },
-                        ensure_ascii=False,
-                    )
+                _emit_video_progress(
+                    row_id,
+                    8,
+                    self._t("video_export_status_running"),
+                    done + 0.08,
+                )
+                _emit_video_progress(
+                    row_id,
+                    24,
+                    self._t("video_export_status_running"),
+                    done + 0.24,
                 )
 
                 ok = False
@@ -7891,6 +8704,12 @@ class WebBridge(QObject):
                     )
                 if ivf.exists() and ivf.is_file():
                     ext = ".mkv" if fmt == "mkv" else ".mp4"
+                    _emit_video_progress(
+                        row_id,
+                        42,
+                        self._t("video_export_status_running"),
+                        done + 0.42,
+                    )
 
                     def _mark_output(path: Path, success_flag: bool) -> None:
                         if success_flag and path.exists() and path.is_file():
@@ -7938,12 +8757,17 @@ class WebBridge(QObject):
                     # Burn mode without subtitles is downgraded to container for reliability.
                     if row_export_mode == "burn" and not subtitle_hit:
                         row_export_mode = "container"
-                        mode_auto_downgraded = True
                         self.logMessage.emit(f"[INFO] [{name}] burn mode downgraded to container (subtitle miss)")
 
                     if row_export_mode == "container":
                         out = output_dir / f"{stem}{ext}"
                         self.logMessage.emit(f"[INFO] [{name}] export start -> {out}")
+                        _emit_video_progress(
+                            row_id,
+                            68,
+                            self._t("video_export_status_running"),
+                            done + 0.68,
+                        )
                         ok, detail = _export_one(out, subtitle_inputs, "container")
                         if (not ok) and subtitle_inputs:
                             self.logMessage.emit(f"[WARN] [{name}] container export with subtitles failed, retrying without subtitles: {detail}")
@@ -7952,6 +8776,12 @@ class WebBridge(QObject):
                         if not ok and detail:
                             self.logMessage.emit(f"[ERROR] [{name}] export failed: {detail}")
                     elif row_export_mode == "burn":
+                        _emit_video_progress(
+                            row_id,
+                            68,
+                            self._t("video_export_status_running"),
+                            done + 0.68,
+                        )
                         if subtitle_inputs:
                             ok = True
                             for sub_path, lang in subtitle_inputs:
@@ -7973,6 +8803,12 @@ class WebBridge(QObject):
                     else:
                         base_out = output_dir / f"{stem}{ext}"
                         self.logMessage.emit(f"[INFO] [{name}] hybrid container start -> {base_out}")
+                        _emit_video_progress(
+                            row_id,
+                            68,
+                            self._t("video_export_status_running"),
+                            done + 0.68,
+                        )
                         ok_container, detail = _export_one(base_out, subtitle_inputs, "container")
                         if (not ok_container) and subtitle_inputs:
                             self.logMessage.emit(f"[WARN] [{name}] hybrid container leg with subtitles failed, retrying without subtitles: {detail}")
@@ -7993,22 +8829,22 @@ class WebBridge(QObject):
                                     self.logMessage.emit(f"[ERROR] [{name}] hybrid burn leg failed ({lang or 'SUB'}): {detail}")
                                 ok = ok and one_ok
 
+                _emit_video_progress(
+                    row_id,
+                    92,
+                    self._t("video_export_status_running"),
+                    done + 0.92,
+                )
                 done += 1
                 if ok:
                     success += 1
                 else:
                     failed += 1
-                self.videoExportProgress.emit(
-                    json.dumps(
-                        {
-                            "id": row_id,
-                            "progress": 100,
-                            "status": self._t("video_export_status_done") if ok else self._t("video_export_status_failed"),
-                            "done": done,
-                            "total": total,
-                        },
-                        ensure_ascii=False,
-                    )
+                _emit_video_progress(
+                    row_id,
+                    100,
+                    self._t("video_export_status_done") if ok else self._t("video_export_status_failed"),
+                    done,
                 )
 
         subtitle_note = ""
@@ -8018,10 +8854,8 @@ class WebBridge(QObject):
                 added=subtitle_included_count,
                 missing=subtitle_miss_count,
             )
-        mode_for_summary = "container" if (mode_auto_downgraded and export_mode == "burn") else effective_export_mode
-        mode_note = self._t("video_export_mode_summary", mode=self._t(f"video_export_mode_{mode_for_summary}"))
-        if subtitle_auto_fallback:
-            subtitle_note = (f"{subtitle_note}\n{self._t('video_export_subtitle_online_unstable')}" if subtitle_note else self._t("video_export_subtitle_online_unstable")).strip()
+        # Keep summary aligned with user-selected export mode.
+        mode_note = self._t("video_export_mode_summary", mode=self._t(f"video_export_mode_{export_mode}"))
 
         self.videoExportFinished.emit(
             json.dumps(
@@ -8047,7 +8881,6 @@ class WebBridge(QObject):
         candidates: list[dict[str, Any]] = []
         supported_video_exts = {".ivf", ".264", ".h264", ".m1v"}
         all_have_supported_video = True
-        default_parent = ""
 
         def _as_existing_abs_path(text: str) -> Path | None:
             raw = Path(str(text or "").strip())
@@ -8070,9 +8903,6 @@ class WebBridge(QObject):
             ):
                 all_have_supported_video = False
                 continue
-            if not default_parent:
-                default_parent = str(video_path.parent)
-
             audio = report.get("audio") or {}
             audio_tracks: list[dict[str, Any]] = []
             wavs: list[str] = []
@@ -8115,7 +8945,8 @@ class WebBridge(QObject):
 
         if not all_have_supported_video or len(candidates) != len(ok_reports):
             return [], ""
-        return candidates, default_parent
+        # Output folder is required input from user; do not auto-fill a default path.
+        return candidates, ""
 
     @Slot(str)
     def runTask(self, payload_json: str) -> None:
@@ -8136,6 +8967,9 @@ class WebBridge(QObject):
         self._worker.start()
 
     def _collect_config(self, payload: dict) -> dict:
+        self._set_game(str(payload.get("game") or self._get_game()))
+        self._ensure_game_key_scaffold()
+
         input_mode = str(payload.get("input_mode") or "single").strip().lower()
         input_text = str(payload.get("input") or "").strip()
         input_files_payload = payload.get("input_files") if isinstance(payload.get("input_files"), list) else []
@@ -8347,6 +9181,7 @@ class WebBridge(QObject):
             )
 
             Path(opt.output_dir).mkdir(parents=True, exist_ok=True)
+            self._register_generated_dir(Path(opt.output_dir))
             max_workers = max(os.cpu_count() or 1, 1)
             use_parallel = (not no_parallel) and max_workers > 1 and len(files) > 1
 

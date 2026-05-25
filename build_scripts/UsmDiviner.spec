@@ -21,9 +21,8 @@ if not (PROJECT_ROOT / "usmdiviner").exists():
         "Please run pyinstaller from project root."
     )
 
-# Define entry point (GUI) - use explicit entry script for proper module discovery
-# in PyInstaller packaged mode
-ENTRY_POINT = str(PROJECT_ROOT / "__main_entry__.py")
+# Define entry point (GUI) - use packaged launcher inside the package.
+ENTRY_POINT = str(PROJECT_ROOT / "usmdiviner" / "packaged_entry.py")
 
 # Build data files list - only include directories that exist
 datas = []
@@ -38,16 +37,6 @@ a = Analysis(
     binaries=[],
     datas=datas,
     hiddenimports=[
-        "PyQt5.QtCore",
-        "PyQt5.QtGui",
-        "PyQt5.QtWidgets",
-        "PyQt5.QtWebChannel",
-        "PyQt5.QtWebEngineWidgets",
-        "PyQt5.QtNetwork",
-    ],
-    hookspath=[str(PROJECT_ROOT / "build_scripts" / "hooks")],
-    runtime_hooks=[],
-    excludedimports=[
         "PySide6",
         "PySide6.QtCore",
         "PySide6.QtGui",
@@ -55,10 +44,20 @@ a = Analysis(
         "PySide6.QtWebEngineWidgets",
         "PySide6.QtNetwork",
         "PySide6.QtWebChannel",
+    ],
+    hookspath=[],
+    runtime_hooks=[],
+    excludedimports=[
+        "PyQt5",
+        "PyQt5.QtCore",
+        "PyQt5.QtGui",
+        "PyQt5.QtWidgets",
+        "PyQt5.QtWebChannel",
+        "PyQt5.QtWebEngineWidgets",
+        "PyQt5.QtNetwork",
+        "PyQt5.QtWebKit",
+        "PyQt5.QtWebKitWidgets",
         "PySide2",
-        "PySide2.QtCore",
-        "PySide2.QtGui",
-        "PySide2.QtWidgets",
         "tkinter",
     ],
     win_no_prefer_redirects=False,
@@ -99,3 +98,4 @@ if sys.platform == "darwin":
             "NSHighResolutionCapable": "True",
         },
     )
+
