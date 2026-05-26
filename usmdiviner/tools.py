@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 import platform
@@ -8,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from functools import lru_cache
 from pathlib import Path
 
 from .exceptions import ExternalToolError
@@ -190,6 +192,275 @@ def _video_input_ffmpeg_args(video_path: Path) -> list[str]:
     if ext == ".ivf":
         return ["-f", "ivf"]
     return []
+
+
+def _video_encoder_ffmpeg_args(video_encoder: str | None = None) -> list[str]:
+    encoder = str(video_encoder or "").strip().lower()
+    if encoder == "h264_nvenc":
+        return ["-c:v", "h264_nvenc", "-preset", "p5", "-cq", "19", "-b:v", "0"]
+    if encoder == "h264_amf":
+        return ["-c:v", "h264_amf", "-quality", "quality", "-rc", "cqp", "-qp_i", "18", "-qp_p", "20"]
+    if encoder == "h264_qsv":
+        return ["-c:v", "h264_qsv", "-global_quality", "20", "-look_ahead", "1"]
+    if encoder == "h264_videotoolbox":
+        return ["-c:v", "h264_videotoolbox", "-q:v", "35"]
+    return ["-c:v", "libx264", "-preset", "medium", "-crf", "10"]
+
+
+def _run_probe_command(command: list[str], timeout: int = 6) -> str:
+    try:
+        proc = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=timeout,
+            errors="replace",
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return str(proc.stdout or "")
+
+
+def _extract_gpu_vendors(text: str) -> set[str]:
+    blob = str(text or "").lower()
+    vendors: set[str] = set()
+    if any(token in blob for token in ("nvidia", "geforce", "quadro", "tesla")):
+        vendors.add("nvidia")
+    if any(token in blob for token in ("amd", "radeon", "firepro", "rx ", "vega", "rdna")):
+        vendors.add("amd")
+    if any(token in blob for token in ("intel", "arc", "iris", "uhd", "xe ")):
+        vendors.add("intel")
+    if any(token in blob for token in ("apple", "m1", "m2", "m3", "m4", "m5")):
+        vendors.add("apple")
+    return vendors
+
+
+@lru_cache(maxsize=1)
+def _detect_system_gpu_model_name() -> str:
+    """Extract the actual GPU model name from system info."""
+    system = platform.system().lower()
+    supported_vendors = ("nvidia", "amd", "radeon", "intel", "apple", "geforce", "firepro", "arc")
+    
+    if system == "windows":
+        try:
+            # Use PowerShell with JSON output for reliable parsing
+            ps_cmd = 'Get-CimInstance -ClassName Win32_VideoController | Select-Object Name | ConvertTo-Json'
+            result = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", ps_cmd],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                timeout=5,
+                errors="replace"
+            )
+            if result.returncode == 0 and result.stdout:
+                try:
+                    data = json.loads(result.stdout)
+                    # Handle both single GPU and multiple GPUs
+                    gpus_list = data if isinstance(data, list) else [data]
+                    
+                    # Filter and return first GPU from supported vendors
+                    for gpu in gpus_list:
+                        if isinstance(gpu, dict):
+                            name = gpu.get("Name", "")
+                        else:
+                            name = str(gpu)
+                        
+                        if name and len(name) > 2:
+                            # Filter to only supported GPU vendors and exclude virtual adapters
+                            name_lower = name.lower()
+                            if any(vendor in name_lower for vendor in supported_vendors):
+                                # Skip virtual/fake adapters
+                                if not any(skip in name_lower for skip in ("virtual", "turzx", "hyper", "remote", "vmware")):
+                                    return name
+                except (json.JSONDecodeError, ValueError):
+                    pass
+        except (OSError, subprocess.SubprocessError):
+            pass
+        
+        return ""
+    
+    elif system == "darwin":
+        output = _run_probe_command(["system_profiler", "SPDisplaysDataType"], timeout=10)
+        if output:
+            for line in output.split("\n"):
+                line = line.strip()
+                if "Chipset Model:" in line:
+                    if ":" in line:
+                        value = line.split(":", 1)[1].strip()
+                        if value and len(value) > 2:
+                            # Check if it's from supported vendors
+                            if any(vendor in value.lower() for vendor in supported_vendors):
+                                return value
+        return ""
+    
+    else:
+        # Linux
+        lspci_output = _run_probe_command(["lspci", "-nn", "-v"])
+        if lspci_output:
+            for line in lspci_output.split("\n"):
+                if "VGA" in line or "3D controller" in line:
+                    # Extract GPU name after the vendor info
+                    if ": " in line:
+                        part = line.split(": ", 1)[1]
+                        # Remove PCI device ID info
+                        if "[" in part:
+                            part = part.split("[")[0]
+                        part = part.strip()
+                        # Check if it's from supported vendors
+                        if part and any(vendor in part.lower() for vendor in supported_vendors):
+                            return part
+        
+        # Fallback to nvidia-smi for NVIDIA GPUs
+        try:
+            nvidia_output = _run_probe_command(["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"])
+            if nvidia_output:
+                for line in nvidia_output.split("\n"):
+                    line = line.strip()
+                    if line:
+                        return line
+        except:
+            pass
+        
+        return ""
+
+
+def _detect_system_gpu_vendors() -> tuple[str, ...]:
+    system = platform.system().lower()
+    chunks: list[str] = []
+    if system == "windows":
+        chunks.append(_run_probe_command(["wmic", "path", "win32_VideoController", "get", "Name"]))
+        chunks.append(
+            _run_probe_command(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-Command",
+                    "Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name",
+                ]
+            )
+        )
+    elif system == "darwin":
+        chunks.append(_run_probe_command(["system_profiler", "SPDisplaysDataType"], timeout=10))
+    else:
+        chunks.append(_run_probe_command(["lspci"]))
+        chunks.append(_run_probe_command(["lshw", "-C", "display"]))
+
+    merged = "\n".join(part for part in chunks if part)
+    vendors = sorted(_extract_gpu_vendors(merged))
+    return tuple(vendors)
+
+
+@lru_cache(maxsize=8)
+def _ffmpeg_supported_h264_encoders(ffmpeg: str) -> tuple[str, ...]:
+    text = _run_probe_command([ffmpeg, "-hide_banner", "-encoders"], timeout=10)
+    if not text:
+        return tuple()
+    wanted = ("h264_nvenc", "h264_amf", "h264_qsv", "h264_videotoolbox")
+    hits = [name for name in wanted if re.search(rf"\b{name}\b", text)]
+    return tuple(hits)
+
+
+def detect_video_export_hardware(ffmpeg: str | None) -> dict[str, str | bool]:
+    if not ffmpeg:
+        return {
+            "available": False,
+            "vendor": "",
+            "vendor_label": "",
+            "encoder": "",
+            "encoder_label": "",
+            "gpu_model": "",
+            "reason": "ffmpeg not found",
+        }
+
+    vendors = list(_detect_system_gpu_vendors())
+    if not vendors:
+        return {
+            "available": False,
+            "vendor": "",
+            "vendor_label": "",
+            "encoder": "",
+            "encoder_label": "",
+            "gpu_model": "",
+            "reason": "no supported GPU detected",
+        }
+
+    encoders = set(_ffmpeg_supported_h264_encoders(ffmpeg))
+    if not encoders:
+        return {
+            "available": False,
+            "vendor": ",".join(vendors),
+            "vendor_label": ", ".join(v.upper() for v in vendors),
+            "encoder": "",
+            "encoder_label": "",
+            "gpu_model": "",
+            "reason": "ffmpeg build has no supported hardware h264 encoder",
+        }
+
+    vendor_preferred: list[tuple[str, str]] = []
+    if "nvidia" in vendors:
+        vendor_preferred.append(("nvidia", "h264_nvenc"))
+    if "amd" in vendors:
+        vendor_preferred.append(("amd", "h264_amf"))
+    if "intel" in vendors:
+        vendor_preferred.append(("intel", "h264_qsv"))
+    if "apple" in vendors:
+        vendor_preferred.append(("apple", "h264_videotoolbox"))
+
+    fallback_order = ["h264_nvenc", "h264_amf", "h264_qsv", "h264_videotoolbox"]
+
+    chosen_vendor = ""
+    chosen_encoder = ""
+    for vendor, encoder in vendor_preferred:
+        if encoder in encoders:
+            chosen_vendor = vendor
+            chosen_encoder = encoder
+            break
+
+    if not chosen_encoder:
+        for encoder in fallback_order:
+            if encoder in encoders:
+                chosen_encoder = encoder
+                break
+        if chosen_encoder:
+            chosen_vendor = ",".join(vendors)
+
+    if not chosen_encoder:
+        return {
+            "available": False,
+            "vendor": ",".join(vendors),
+            "vendor_label": ", ".join(v.upper() for v in vendors),
+            "encoder": "",
+            "encoder_label": "",
+            "gpu_model": "",
+            "reason": "no compatible hardware encoder for detected GPU vendor",
+        }
+
+    encoder_labels = {
+        "h264_nvenc": "NVIDIA NVENC",
+        "h264_amf": "AMD AMF",
+        "h264_qsv": "Intel QSV",
+        "h264_videotoolbox": "Apple VideoToolbox",
+    }
+    vendor_labels = {
+        "nvidia": "NVIDIA",
+        "amd": "AMD",
+        "intel": "Intel",
+        "apple": "Apple Silicon",
+    }
+    # Get actual GPU model name
+    gpu_model = _detect_system_gpu_model_name()
+    
+    return {
+        "available": True,
+        "vendor": chosen_vendor,
+        "vendor_label": vendor_labels.get(chosen_vendor, chosen_vendor.upper() if chosen_vendor else "GPU"),
+        "encoder": chosen_encoder,
+        "encoder_label": encoder_labels.get(chosen_encoder, chosen_encoder),
+        "gpu_model": gpu_model,
+        "reason": "",
+    }
 
 
 def _normalize_arch(machine: str) -> str:
@@ -474,6 +745,7 @@ def mux_to_mkv(
     output_mkv: Path,
     convert_subtitles_to_ass: bool = True,
     timeout: int = 300,
+    video_encoder: str | None = None,
 ) -> tuple[bool, str]:
     if not video_path.exists() or video_path.stat().st_size == 0:
         return False, "video stream does not exist"
@@ -509,20 +781,20 @@ def mux_to_mkv(
                 if ass_path is None:
                     return False, f"failed to convert subtitle to ASS: {subtitle_path.name}"
                 cmd.extend(["-vf", _subtitle_burn_filter(ass_path, font_file)])
-                cmd.extend(["-c:v", "libx264", "-preset", "medium", "-crf", "10"])
+                cmd.extend(_video_encoder_ffmpeg_args(video_encoder))
                 if existing_audio:
                     cmd.extend(["-c:a", "mp3", "-b:a", "1411k"])
                 cmd.append(str(output_mkv))
                 return _run_ffmpeg_command(ffmpeg, cmd, output_mkv, timeout, "ffmpeg failed")
 
         cmd.extend(["-vf", _subtitle_burn_filter(subtitle_path, font_file)])
-        cmd.extend(["-c:v", "libx264", "-preset", "medium", "-crf", "10"])
+        cmd.extend(_video_encoder_ffmpeg_args(video_encoder))
         if existing_audio:
             cmd.extend(["-c:a", "mp3", "-b:a", "1411k"])
         cmd.append(str(output_mkv))
         return _run_ffmpeg_command(ffmpeg, cmd, output_mkv, timeout, "ffmpeg failed")
 
-    cmd.extend(["-c:v", "libx264", "-preset", "medium", "-crf", "10"])
+    cmd.extend(_video_encoder_ffmpeg_args(video_encoder))
     if existing_audio:
         cmd.extend(["-c:a", "mp3", "-b:a", "1411k"])
     cmd.append(str(output_mkv))
@@ -539,6 +811,7 @@ def mux_to_mkv_soft(
     default_sub_lang: str = "",
     convert_subtitles_to_ass: bool = True,
     timeout: int = 300,
+    video_encoder: str | None = None,
 ) -> tuple[bool, str]:
     if not video_path.exists() or video_path.stat().st_size == 0:
         return False, "video stream does not exist"
@@ -580,7 +853,7 @@ def mux_to_mkv_soft(
         for i in range(len(prepared_subs)):
             cmd.extend(["-map", f"{subtitle_start + i}:s:0"])
 
-        cmd.extend(["-c:v", "libx264", "-preset", "medium", "-crf", "10"])
+        cmd.extend(_video_encoder_ffmpeg_args(video_encoder))
         if existing_audio:
             cmd.extend(["-c:a", "mp3", "-b:a", "1411k"])
         if prepared_subs:
@@ -610,6 +883,7 @@ def transcode_mkv_to_mp4(
     output_mp4: Path,
     subtitle_input: Path | None = None,
     timeout: int = 600,
+    video_encoder: str | None = None,
 ) -> tuple[bool, str]:
     if not input_mkv.exists() or input_mkv.stat().st_size == 0:
         return False, "mkv input does not exist"
@@ -629,19 +903,8 @@ def transcode_mkv_to_mp4(
         ]
         if subtitle_filter:
             cmd.extend(["-vf", subtitle_filter])
-        cmd.extend([
-            "-c:v",
-            "libx264",
-            "-preset",
-            "medium",
-            "-crf",
-            "10",
-            "-c:a",
-            "mp3",
-            "-b:a",
-            "1411k",
-            str(output_mp4),
-        ])
+        cmd.extend(_video_encoder_ffmpeg_args(video_encoder))
+        cmd.extend(["-c:a", "mp3", "-b:a", "1411k", str(output_mp4)])
         return cmd
 
     if subtitle_input is not None:
@@ -668,6 +931,7 @@ def transcode_ivf_to_mp4(
     output_mp4: Path,
     convert_subtitles_to_ass: bool = True,
     timeout: int = 600,
+    video_encoder: str | None = None,
 ) -> tuple[bool, str]:
     if not video_path.exists() or video_path.stat().st_size == 0:
         return False, "video stream does not exist"
@@ -702,20 +966,20 @@ def transcode_ivf_to_mp4(
                 if ass_path is None:
                     return False, f"failed to convert subtitle to ASS: {subtitle_path.name}"
                 cmd.extend(["-vf", _subtitle_burn_filter(ass_path, font_file)])
-                cmd.extend(["-c:v", "libx264", "-preset", "medium", "-crf", "10"])
+                cmd.extend(_video_encoder_ffmpeg_args(video_encoder))
                 if existing_audio:
                     cmd.extend(["-c:a", "mp3", "-b:a", "1411k"])
                 cmd.append(str(output_mp4))
                 return _run_ffmpeg_command(ffmpeg, cmd, output_mp4, timeout, "ffmpeg mp4 transcode failed")
 
         cmd.extend(["-vf", _subtitle_burn_filter(subtitle_path, font_file)])
-        cmd.extend(["-c:v", "libx264", "-preset", "medium", "-crf", "10"])
+        cmd.extend(_video_encoder_ffmpeg_args(video_encoder))
         if existing_audio:
             cmd.extend(["-c:a", "mp3", "-b:a", "1411k"])
         cmd.append(str(output_mp4))
         return _run_ffmpeg_command(ffmpeg, cmd, output_mp4, timeout, "ffmpeg mp4 transcode failed")
 
-    cmd.extend(["-c:v", "libx264", "-preset", "medium", "-crf", "10"])
+    cmd.extend(_video_encoder_ffmpeg_args(video_encoder))
     if existing_audio:
         cmd.extend(["-c:a", "mp3", "-b:a", "1411k"])
     cmd.append(str(output_mp4))
@@ -731,6 +995,7 @@ def transcode_ivf_to_mp4_soft(
     default_sub_lang: str = "",
     convert_subtitles_to_ass: bool = True,
     timeout: int = 600,
+    video_encoder: str | None = None,
 ) -> tuple[bool, str]:
     if not video_path.exists() or video_path.stat().st_size == 0:
         return False, "video stream does not exist"
@@ -772,7 +1037,7 @@ def transcode_ivf_to_mp4_soft(
         for i in range(len(prepared_subs)):
             cmd.extend(["-map", f"{subtitle_start + i}:s:0"])
 
-        cmd.extend(["-c:v", "libx264", "-preset", "medium", "-crf", "10"])
+        cmd.extend(_video_encoder_ffmpeg_args(video_encoder))
         if existing_audio:
             cmd.extend(["-c:a", "mp3", "-b:a", "1411k"])
         if prepared_subs:

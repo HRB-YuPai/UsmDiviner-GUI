@@ -28,7 +28,7 @@ from .exceptions import UsmDivinerError
 from .keys import full_key_from_genshin_like_key, parse_full_key
 from .models import ProcessOptions
 from .processor import process_one
-from .tools import find_ffmpeg, find_vgmstream
+from .tools import detect_video_export_hardware, find_ffmpeg, find_vgmstream
 from .tools import mux_to_mkv, mux_to_mkv_soft, transcode_ivf_to_mp4, transcode_ivf_to_mp4_soft
 from .usm import collect_usm_inputs
 from .path_utils import get_resource_path, get_user_data_path, get_external_tool_path
@@ -803,8 +803,8 @@ HTML_TEMPLATE = r"""<!doctype html>
         }
 
         .mode-toggle-track {
-            width: 34px;
-            height: 18px;
+            width: 48px;
+            height: 24px;
             border-radius: 999px;
             border: 1px solid var(--line);
             background: color-mix(in srgb, var(--surface-2) 80%, transparent);
@@ -815,10 +815,10 @@ HTML_TEMPLATE = r"""<!doctype html>
 
         .mode-toggle-thumb {
             position: absolute;
-            top: 1px;
-            left: 1px;
-            width: 14px;
-            height: 14px;
+            top: 2px;
+            left: 2px;
+            width: 18px;
+            height: 18px;
             border-radius: 50%;
             background: linear-gradient(180deg, #ffffff, color-mix(in srgb, #ffffff 78%, var(--acc) 22%));
             box-shadow: 0 1px 3px #00000055;
@@ -836,7 +836,7 @@ HTML_TEMPLATE = r"""<!doctype html>
         }
 
         .mode[data-mode="batch"] .mode-toggle-thumb {
-            transform: translateX(16px);
+            transform: translateX(26px);
             background: linear-gradient(180deg, color-mix(in srgb, #ffffff 70%, var(--acc) 30%), var(--acc));
         }
 
@@ -1417,6 +1417,56 @@ HTML_TEMPLATE = r"""<!doctype html>
         .video-export-hybrid-group {
             flex: 0 1 220px;
             grid-template-columns: max-content minmax(84px, 1fr);
+        }
+
+        .video-export-hw-group {
+            flex: 1 1 300px;
+            grid-template-columns: max-content auto;
+        }
+
+        .video-export-hw-header {
+            display: inline-flex;
+            align-items: center;
+            justify-content: flex-start;
+            gap: 6px;
+            width: auto;
+        }
+
+        .video-export-hw-header label[for="video_export_hw_toggle"] {
+            flex-shrink: 0;
+        }
+
+        .video-export-hw-info {
+            grid-column: 1 / -1;
+            font-size: 10px;
+            color: var(--muted);
+            line-height: 1.3;
+            white-space: normal;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            padding: 2px 0;
+            word-break: break-word;
+        }
+
+        #video_export_hw_toggle_shell.toggle-switch {
+            width: 36px;
+            height: 18px;
+            border-radius: 9px;
+        }
+
+        #video_export_hw_toggle_shell.toggle-switch .toggle-slider {
+            border-radius: 9px;
+        }
+
+        #video_export_hw_toggle_shell.toggle-switch .toggle-slider:before {
+            height: 14px;
+            width: 14px;
+            left: 2px;
+            bottom: 2px;
+        }
+
+        #video_export_hw_toggle_shell.toggle-switch input:checked + .toggle-slider:before {
+            transform: translateX(18px);
         }
 
         .video-export-config input[type="text"],
@@ -2378,6 +2428,26 @@ HTML_TEMPLATE = r"""<!doctype html>
             transform: translateX(24px);
         }
 
+        #blk_parse_toggle_shell .toggle-slider {
+            border-color: color-mix(in srgb, #2f89ff 55%, var(--line) 45%);
+            background: linear-gradient(90deg, color-mix(in srgb, #2f89ff 54%, transparent), color-mix(in srgb, #6ec3ff 42%, transparent));
+        }
+
+        #blk_parse_toggle_shell input:checked + .toggle-slider {
+            border-color: color-mix(in srgb, #c77dff 55%, var(--line) 45%);
+            background: linear-gradient(90deg, color-mix(in srgb, #c77dff 54%, transparent), color-mix(in srgb, #e0aaff 42%, transparent));
+        }
+
+        #versions_patch_toggle_shell .toggle-slider {
+            border-color: color-mix(in srgb, #2f89ff 55%, var(--line) 45%);
+            background: linear-gradient(90deg, color-mix(in srgb, #2f89ff 54%, transparent), color-mix(in srgb, #6ec3ff 42%, transparent));
+        }
+
+        #versions_patch_toggle_shell input:checked + .toggle-slider {
+            border-color: color-mix(in srgb, #ff7a2f 55%, var(--line) 45%);
+            background: linear-gradient(90deg, color-mix(in srgb, #ff7a2f 54%, transparent), color-mix(in srgb, #ffb347 44%, transparent));
+        }
+
         /* Settings Modal Styles */
         .modal-head {
             text-align: center;
@@ -3025,6 +3095,17 @@ HTML_TEMPLATE = r"""<!doctype html>
                                 <label id="video_export_hybrid_limit_label" for="video_export_hybrid_limit">Hybrid hard-sub count</label>
                                 <input id="video_export_hybrid_limit" type="number" min="1" max="8" step="1" value="2" />
                             </div>
+
+                            <div id="video_export_hw_group" class="video-export-inline-group video-export-hw-group hidden">
+                                <div class="video-export-hw-header">
+                                    <label id="video_export_hw_label" for="video_export_hw_toggle">Hardware</label>
+                                    <label class="toggle-switch" id="video_export_hw_toggle_shell">
+                                        <input id="video_export_hw_toggle" type="checkbox" checked />
+                                        <span class="toggle-slider"></span>
+                                    </label>
+                                </div>
+                                <span id="video_export_hw_info" class="video-export-hw-info"></span>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -3248,6 +3329,8 @@ HTML_TEMPLATE = r"""<!doctype html>
         let pendingVideoExportPayload = null;
         let pendingVideoExportCoveragePayload = null;
         let pendingVideoExportSubtitlePromptInfo = null;
+        let videoExportHardwareProfile = null;
+        let videoExportHardwareProbePending = false;
         let progressPumpTimer = null;
         let overallProgressCurrent = 0;
         let overallProgressTarget = 0;
@@ -3507,6 +3590,7 @@ HTML_TEMPLATE = r"""<!doctype html>
                 "video_export_output_pick_btn",
                 "video_export_subtitle_pick_btn",
                 "video_export_close_btn",
+                "video_export_hw_toggle",
                 "video_export_audio_trigger",
                 "video_export_audio_all_btn",
                 "video_export_audio_none_btn",
@@ -3532,6 +3616,7 @@ HTML_TEMPLATE = r"""<!doctype html>
                 if (box) box.disabled = locked;
             }
 
+            updateVideoExportHardwareUi();
             updateVideoExportStartButtonState();
         }
 
@@ -3612,6 +3697,8 @@ HTML_TEMPLATE = r"""<!doctype html>
         }
 
         function buildVideoExportPayload() {
+            const profile = videoExportHardwareProfile || {};
+            const hwEnabled = !!(profile.available && byId("video_export_hw_toggle") && byId("video_export_hw_toggle").checked);
             return {
                 format: byId("video_export_format").value,
                 output_dir: String(byId("video_export_output").value || "").trim(),
@@ -3624,6 +3711,8 @@ HTML_TEMPLATE = r"""<!doctype html>
                 default_subtitle_lang: getPreferredSoftSubtitleLang(),
                 hybrid_hardsub_limit: byId("video_export_hybrid_limit") ? Number(byId("video_export_hybrid_limit").value || 2) : 2,
                 subtitle_convert_mode: "original",
+                use_hwaccel: hwEnabled,
+                hw_encoder: hwEnabled ? String(profile.encoder || "") : "",
             };
         }
 
@@ -3848,6 +3937,84 @@ HTML_TEMPLATE = r"""<!doctype html>
             if (selected.includes("CHS")) return "CHS";
             if (selected.includes("EN")) return "EN";
             return selected.length ? selected[0] : "";
+        }
+
+        function updateVideoExportHardwareUi() {
+            const dict = t(currentLang());
+            const group = byId("video_export_hw_group");
+            const toggle = byId("video_export_hw_toggle");
+            const info = byId("video_export_hw_info");
+            const profile = videoExportHardwareProfile || {};
+            const available = !!profile.available;
+            
+            if (group) {
+                group.classList.toggle("hidden", !available);
+            }
+            if (toggle) {
+                if (!available) {
+                    toggle.checked = false;
+                }
+                toggle.disabled = !!videoExportRunning || !available;
+            }
+            if (info) {
+                if (videoExportHardwareProbePending) {
+                    info.textContent = dict.video_export_hw_probe_running || "Detecting hardware...";
+                } else if (available) {
+                    let infoText = "";
+                    const gpuModel = String(profile.gpu_model || "").trim();
+                    const vendorLabel = String(profile.vendor_label || profile.vendor || "GPU");
+                    const encoderLabel = String(profile.encoder_label || profile.encoder || "H264");
+                    
+                    if (gpuModel && gpuModel.length > 2) {
+                        // If we have the actual GPU model name, show it with encoder info
+                        const modelTemplate = dict.video_export_hw_detected_model || "Detected: {model}";
+                        infoText = modelTemplate.replace("{model}", gpuModel);
+                    } else {
+                        // Fallback: show vendor + encoder
+                        const template = String(dict.video_export_hw_detected || "Detected: {vendor} ({encoder})");
+                        infoText = template
+                            .replace("{vendor}", vendorLabel)
+                            .replace("{encoder}", encoderLabel);
+                    }
+                    info.textContent = infoText;
+                } else {
+                    info.textContent = "";
+                }
+            }
+        }
+
+        function probeVideoExportHardware(force = false) {
+            if (!bridge || !bridge.probeVideoExportHardware) {
+                return;
+            }
+            if (videoExportHardwareProbePending) {
+                return;
+            }
+            if (!force && videoExportHardwareProfile) {
+                updateVideoExportHardwareUi();
+                return;
+            }
+            videoExportHardwareProbePending = true;
+            videoExportHardwareProfile = null;
+            updateVideoExportHardwareUi();
+            bridge.probeVideoExportHardware();
+        }
+
+        function onVideoExportHardwareReady(payloadJson) {
+            let payload = {};
+            try {
+                payload = JSON.parse(payloadJson || "{}");
+            } catch (_) {
+                payload = {};
+            }
+            videoExportHardwareProbePending = false;
+            videoExportHardwareProfile = payload;
+            updateVideoExportHardwareUi();
+            if (!payload.available) {
+                const dict = t(currentLang());
+                const reason = String(payload.reason || dict.video_export_hw_cpu_fallback || "Hardware unavailable, using CPU encoder.");
+                appendLog(`[INFO] ${reason}`);
+            }
         }
 
         function updateVideoExportCapabilityUi() {
@@ -5072,6 +5239,7 @@ HTML_TEMPLATE = r"""<!doctype html>
             updateVideoExportSubtitleSourceUi();
             updateVideoExportModeUi();
             updateVideoExportCapabilityUi();
+            probeVideoExportHardware(true);
             byId("video_export_modal").classList.remove("hidden");
         }
 
@@ -5083,6 +5251,7 @@ HTML_TEMPLATE = r"""<!doctype html>
             if (byId("video_export_subtitle_source")) byId("video_export_subtitle_source").value = "online";
             if (byId("video_export_mode")) byId("video_export_mode").value = "container";
             if (byId("video_export_hybrid_limit")) byId("video_export_hybrid_limit").value = "2";
+            if (byId("video_export_hw_toggle")) byId("video_export_hw_toggle").checked = true;
             setVideoExportSubtitleLangAll(true);
             videoExportLocalSubtitleFiles = [];
             updateVideoExportSubtitleLocalInfo();
@@ -5091,6 +5260,7 @@ HTML_TEMPLATE = r"""<!doctype html>
             refreshVideoExportAudioSummary();
             refreshVideoExportSubtitleLangSummary();
             updateVideoExportCapabilityUi();
+            updateVideoExportHardwareUi();
             refreshCustomSelect("video_export_subtitle_source");
             refreshCustomSelect("video_export_mode");
         }
@@ -5118,6 +5288,15 @@ HTML_TEMPLATE = r"""<!doctype html>
 
         function startVideoExport() {
             if (!bridge || !bridge.startVideoExport || videoExportRunning) return;
+            if (!videoExportHardwareProfile) {
+                if (bridge.probeVideoExportHardware) {
+                    if (!videoExportHardwareProbePending) {
+                        probeVideoExportHardware(true);
+                    }
+                    showCopyToast(t(currentLang()).video_export_hw_probe_running || "Detecting hardware...");
+                    return;
+                }
+            }
             const payload = buildVideoExportPayload();
             if (!payload.output_dir) {
                 showCopyToast(t(currentLang()).video_export_output_required || "");
@@ -5161,6 +5340,7 @@ HTML_TEMPLATE = r"""<!doctype html>
             refreshVideoExportAudioSummary();
             refreshVideoExportSubtitleLangSummary();
             updateVideoExportCapabilityUi();
+            updateVideoExportHardwareUi();
             updateVideoExportStartButtonState();
             renderVideoExportButton();
         }
@@ -5332,6 +5512,8 @@ HTML_TEMPLATE = r"""<!doctype html>
             setText("video_export_format_label", dict.video_export_format_label || "Format");
             setText("video_export_mode_label", dict.video_export_mode_label || "Export Strategy");
             setText("video_export_hybrid_limit_label", dict.video_export_hybrid_limit_label || "Hybrid hard-sub count");
+            setText("video_export_hw_label", dict.video_export_hw_label || "Hardware");
+            setText("video_export_hw_toggle_text", dict.video_export_hw_toggle_text || "Use hardware acceleration");
             setText("video_export_output_label", dict.video_export_output_label || "Output");
             setText("video_export_output_pick_btn", dict.browse || "Browse");
             setText("video_export_audio_label", dict.video_export_audio || "Audio");
@@ -5407,6 +5589,7 @@ HTML_TEMPLATE = r"""<!doctype html>
             setTooltip("versions_patch_close_btn", dict.btn_versions_patch_close_tooltip || dict.close);
             setTooltip("video_export_output_pick_btn", dict.browse || "Browse");
             setTooltip("video_export_subtitle_pick_btn", dict.video_export_subtitle_pick_tooltip || dict.video_export_subtitle_pick || "Pick");
+            setTooltip("video_export_hw_toggle_shell", dict.video_export_hw_toggle_tooltip || dict.video_export_hw_toggle_text || "Use hardware acceleration");
             setTooltip("video_export_start_btn", dict.video_export_start_tooltip || dict.video_export_start || "Start Export");
             setTooltip("video_export_close_btn", dict.video_export_close_tooltip || dict.close || "Close");
             setText("settings_title", dict.settings_title);
@@ -5460,6 +5643,7 @@ HTML_TEMPLATE = r"""<!doctype html>
             updateVideoExportModeUi();
             refreshVideoExportSubtitleConvertModalText();
             refreshVideoExportRowsLanguage();
+            updateVideoExportHardwareUi();
             refreshFileList();
             syncInputMode(true);
             syncRules();
@@ -6549,6 +6733,7 @@ HTML_TEMPLATE = r"""<!doctype html>
             bridge.videoExportReady.connect(onVideoExportReady);
             bridge.videoExportProgress.connect(onVideoExportProgress);
             bridge.videoExportFinished.connect(onVideoExportFinished);
+            bridge.videoExportHardwareReady.connect(onVideoExportHardwareReady);
             bridge.videoExportSubtitleCoverageReady.connect(onVideoExportSubtitleCoverageReady);
             bridge.videoExportSubtitleCoverageProgress.connect(onVideoExportSubtitleCoverageProgress);
             bridge.runStateChanged.connect(setRunning);
@@ -6897,6 +7082,7 @@ class WebBridge(QObject):
     videoExportReady = Signal(str)
     videoExportProgress = Signal(str)
     videoExportFinished = Signal(str)
+    videoExportHardwareReady = Signal(str)
     videoExportSubtitleCoverageReady = Signal(str)
     videoExportSubtitleCoverageProgress = Signal(str)
     runStateChanged = Signal(bool)
@@ -8452,29 +8638,65 @@ class WebBridge(QObject):
                         subprocess.Popen(["explorer.exe", str(resolved_path)])
                 return
             if sys.platform == "darwin":
-                subprocess.Popen(["open", "-R", str(resolved_path)])
+                # Prefer Finder reveal (selection). If it fails, open the target directly.
+                try:
+                    subprocess.Popen(["open", "-R", str(resolved_path)])
+                except OSError:
+                    subprocess.Popen(["open", str(resolved_path)])
                 return
             if not self._linux_has_desktop_environment():
                 return
 
             uri = resolved_path.as_uri()
-            parent = resolved_path.parent
-            for command in (
-                ["nautilus", "--select", str(resolved_path)],
-                ["dolphin", "--select", str(resolved_path)],
-                ["nemo", str(resolved_path)],
-                [
-                    "dbus-send",
-                    "--session",
-                    "--dest=org.freedesktop.FileManager1",
-                    "--type=method_call",
-                    "/org/freedesktop/FileManager1",
-                    "org.freedesktop.FileManager1.ShowItems",
-                    f"array:string:{uri}",
-                    "string:",
-                ],
-                ["xdg-open", str(parent)],
-            ):
+            is_file = resolved_path.is_file()
+            select_commands: list[list[str]] = []
+            open_commands: list[list[str]] = []
+
+            if is_file:
+                parent = resolved_path.parent
+                select_commands = [
+                    ["nautilus", "--select", str(resolved_path)],
+                    ["dolphin", "--select", str(resolved_path)],
+                    ["thunar", "--select", str(resolved_path)],
+                    ["nemo", str(resolved_path)],
+                    [
+                        "dbus-send",
+                        "--session",
+                        "--dest=org.freedesktop.FileManager1",
+                        "--type=method_call",
+                        "/org/freedesktop/FileManager1",
+                        "org.freedesktop.FileManager1.ShowItems",
+                        f"array:string:{uri}",
+                        "string:",
+                    ],
+                ]
+                open_commands = [
+                    ["xdg-open", str(parent)],
+                ]
+            else:
+                # For directories, try selecting the directory in parent first, then open directly.
+                parent = resolved_path.parent
+                select_commands = [
+                    ["nautilus", "--select", str(resolved_path)],
+                    ["dolphin", "--select", str(resolved_path)],
+                    ["thunar", "--select", str(resolved_path)],
+                    [
+                        "dbus-send",
+                        "--session",
+                        "--dest=org.freedesktop.FileManager1",
+                        "--type=method_call",
+                        "/org/freedesktop/FileManager1",
+                        "org.freedesktop.FileManager1.ShowItems",
+                        f"array:string:{uri}",
+                        "string:",
+                    ],
+                ]
+                open_commands = [
+                    ["xdg-open", str(resolved_path)],
+                    ["xdg-open", str(parent)],
+                ]
+
+            for command in (*select_commands, *open_commands):
                 if command[0] != "dbus-send" and shutil.which(command[0]) is None:
                     continue
                 try:
@@ -9135,6 +9357,7 @@ class WebBridge(QObject):
         target_root.mkdir(parents=True, exist_ok=True)
         ok_count = 0
         fail_count = 0
+        reveal_target: Path | None = None
         for report in reports:
             src = Path(str(report.get("file") or "report"))
             base = f"{src.stem}_Report.json" if src.stem else "USM_Report.json"
@@ -9150,6 +9373,8 @@ class WebBridge(QObject):
             try:
                 out.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
                 ok_count += 1
+                if reveal_target is None:
+                    reveal_target = out
             except OSError:
                 fail_count += 1
 
@@ -9160,7 +9385,7 @@ class WebBridge(QObject):
                 {
                     "title": self._t("export_all_reports_title"),
                     "message": message,
-                    "path": str(target_root),
+                    "path": str(reveal_target if reveal_target is not None else target_root),
                     "can_reveal": self._can_reveal_saved_path(),
                 },
                 ensure_ascii=False,
@@ -9183,6 +9408,22 @@ class WebBridge(QObject):
         )
         if files:
             self.fieldChosen.emit("video_export_subtitles", json.dumps(files, ensure_ascii=False))
+
+    @Slot()
+    def probeVideoExportHardware(self) -> None:
+        ffmpeg = find_ffmpeg(None)
+        profile = detect_video_export_hardware(ffmpeg)
+        payload = {
+            "available": bool(profile.get("available")),
+            "vendor": str(profile.get("vendor") or ""),
+            "vendor_label": str(profile.get("vendor_label") or ""),
+            "encoder": str(profile.get("encoder") or ""),
+            "encoder_label": str(profile.get("encoder_label") or ""),
+            "gpu_model": str(profile.get("gpu_model") or ""),
+            "reason": str(profile.get("reason") or ""),
+            "ffmpeg": str(ffmpeg or ""),
+        }
+        self.videoExportHardwareReady.emit(json.dumps(payload, ensure_ascii=False))
 
     @Slot(str)
     def startVideoExport(self, payload_json: str) -> None:
@@ -9251,6 +9492,8 @@ class WebBridge(QObject):
                     continue
                 if 0 <= ch <= 3 and ch not in selected_channels:
                     selected_channels.append(ch)
+        use_hwaccel = bool(payload.get("use_hwaccel"))
+        hw_encoder = str(payload.get("hw_encoder") or "").strip().lower()
         ffmpeg = find_ffmpeg(None)
         if not ffmpeg:
             self.videoExportFinished.emit(
@@ -9281,6 +9524,8 @@ class WebBridge(QObject):
                 default_subtitle_lang,
                 hybrid_hardsub_limit,
                 ffmpeg,
+                use_hwaccel,
+                hw_encoder,
             ),
             daemon=True,
         )
@@ -9375,6 +9620,8 @@ class WebBridge(QObject):
         default_subtitle_lang: str,
         hybrid_hardsub_limit: int,
         ffmpeg: str,
+        use_hwaccel: bool,
+        hw_encoder: str,
     ) -> None:
         try:
             self._run_video_export(
@@ -9390,6 +9637,8 @@ class WebBridge(QObject):
                 default_subtitle_lang,
                 hybrid_hardsub_limit,
                 ffmpeg,
+                use_hwaccel,
+                hw_encoder,
             )
         except Exception as exc:
             logger.exception("video export worker crashed")
@@ -9525,6 +9774,8 @@ class WebBridge(QObject):
         default_subtitle_lang: str,
         hybrid_hardsub_limit: int,
         ffmpeg: str,
+        use_hwaccel: bool,
+        hw_encoder: str,
     ) -> None:
         output_dir.mkdir(parents=True, exist_ok=True)
         total = max(1, len(candidates))
@@ -9533,7 +9784,24 @@ class WebBridge(QObject):
         failed = 0
         subtitle_miss_count = 0
         subtitle_included_count = 0
+        reveal_target: Path | None = None
         effective_export_mode = export_mode
+        requested_hw = bool(use_hwaccel)
+        active_video_encoder = str(hw_encoder or "").strip().lower() if requested_hw else ""
+
+        if requested_hw and not active_video_encoder:
+            detected = detect_video_export_hardware(ffmpeg)
+            if detected.get("available"):
+                active_video_encoder = str(detected.get("encoder") or "").strip().lower()
+
+        if requested_hw and not active_video_encoder:
+            self.logMessage.emit(self._t("video_export_hw_cpu_fallback_log"))
+        elif active_video_encoder:
+            self.logMessage.emit(
+                self._t("video_export_hw_enabled_log", encoder=active_video_encoder)
+            )
+        else:
+            self.logMessage.emit(self._t("video_export_hw_disabled_log"))
 
         with tempfile.TemporaryDirectory(prefix="usmdiviner_subtitles_") as tmp:
             subtitle_cache_dir = Path(tmp)
@@ -9559,6 +9827,7 @@ class WebBridge(QObject):
                 name = str((item or {}).get("name") or row_id or "video")
                 ivf = Path(str((item or {}).get("ivf") or ""))
                 stem = Path(name).stem if name else ivf.stem
+                row_export_mode = effective_export_mode
                 audio_tracks = [track for track in ((item or {}).get("audio_tracks") or []) if isinstance(track, dict)]
                 wavs = [Path(str(p)) for p in ((item or {}).get("wavs") or []) if str(p or "").strip()]
                 audio_inputs: list[Path] = []
@@ -9619,6 +9888,8 @@ class WebBridge(QObject):
                 )
 
                 ok = False
+                row_encoder_names: set[str] = set()
+                row_encoder_kinds: set[str] = set()
                 if not ivf.exists() or not ivf.is_file():
                     self.logMessage.emit(
                         f"[ERROR] [{name}] export input video missing: {ivf} (cwd={Path.cwd()})"
@@ -9633,18 +9904,44 @@ class WebBridge(QObject):
                     )
 
                     def _mark_output(path: Path, success_flag: bool) -> None:
+                        nonlocal reveal_target
                         if success_flag and path.exists() and path.is_file():
                             self._register_generated_file(path)
+                            if reveal_target is None:
+                                reveal_target = path
 
                     def _export_one(path: Path, subs: list[tuple[Path, str]], mode: str) -> tuple[bool, str]:
+                        preferred_encoder = active_video_encoder or None
                         self.logMessage.emit(
                             "[INFO] [FFMPEG] "
                             f"[{name}] mode={mode} fmt={fmt} subtitles={len(subs)} audio_tracks={len(audio_inputs)} "
-                            f"subtitle_convert={subtitle_convert_mode} out={path}"
+                            f"subtitle_convert={subtitle_convert_mode} encoder={(preferred_encoder or 'libx264')} out={path}"
                         )
-                        if fmt == "mkv":
+
+                        def _run_with_encoder(encoder: str | None) -> tuple[bool, str]:
+                            if fmt == "mkv":
+                                if mode == "container":
+                                    return mux_to_mkv_soft(
+                                        ffmpeg,
+                                        ivf,
+                                        audio_inputs,
+                                        subs,
+                                        path,
+                                        default_sub_lang=default_subtitle_lang,
+                                        convert_subtitles_to_ass=subtitle_convert_mode == "ass",
+                                        video_encoder=encoder,
+                                    )
+                                return mux_to_mkv(
+                                    ffmpeg,
+                                    ivf,
+                                    audio_inputs,
+                                    subs,
+                                    path,
+                                    convert_subtitles_to_ass=subtitle_convert_mode == "ass",
+                                    video_encoder=encoder,
+                                )
                             if mode == "container":
-                                done_ok, detail = mux_to_mkv_soft(
+                                return transcode_ivf_to_mp4_soft(
                                     ffmpeg,
                                     ivf,
                                     audio_inputs,
@@ -9652,25 +9949,42 @@ class WebBridge(QObject):
                                     path,
                                     default_sub_lang=default_subtitle_lang,
                                     convert_subtitles_to_ass=subtitle_convert_mode == "ass",
+                                    video_encoder=encoder,
                                 )
-                                return done_ok, detail
-                            done_ok, detail = mux_to_mkv(ffmpeg, ivf, audio_inputs, subs, path, convert_subtitles_to_ass=subtitle_convert_mode == "ass")
-                            return done_ok, detail
-                        if mode == "container":
-                            done_ok, detail = transcode_ivf_to_mp4_soft(
+                            return transcode_ivf_to_mp4(
                                 ffmpeg,
                                 ivf,
                                 audio_inputs,
                                 subs,
                                 path,
-                                default_sub_lang=default_subtitle_lang,
                                 convert_subtitles_to_ass=subtitle_convert_mode == "ass",
+                                video_encoder=encoder,
                             )
-                            return done_ok, detail
-                        done_ok, detail = transcode_ivf_to_mp4(ffmpeg, ivf, audio_inputs, subs, path, convert_subtitles_to_ass=subtitle_convert_mode == "ass")
+
+                        done_ok, detail = _run_with_encoder(preferred_encoder)
+                        actual_encoder = preferred_encoder or "libx264"
+                        actual_mode = "HW" if preferred_encoder else "CPU"
+                        if not done_ok and preferred_encoder:
+                            self.logMessage.emit(
+                                self._t("video_export_hw_fallback_log", encoder=preferred_encoder)
+                            )
+                            done_ok, detail = _run_with_encoder(None)
+                            if done_ok:
+                                actual_encoder = "libx264"
+                                actual_mode = "CPU"
+
+                        if done_ok:
+                            self.logMessage.emit(
+                                f"[INFO] [FFMPEG] [{name}] actual encoder used: {actual_encoder} ({actual_mode})"
+                            )
+                        else:
+                            self.logMessage.emit(
+                                f"[WARN] [FFMPEG] [{name}] export failed after encoder attempt: {actual_encoder} ({actual_mode})"
+                            )
+                        row_encoder_names.add(actual_encoder)
+                        row_encoder_kinds.add(actual_mode)
                         return done_ok, detail
 
-                    row_export_mode = effective_export_mode
                     # Flag-driven export flow:
                     # - subtitle_hit=True  -> run with subtitle inputs
                     # - subtitle_hit=False -> run no-subtitle command path
@@ -9755,6 +10069,20 @@ class WebBridge(QObject):
                     self._t("video_export_status_running"),
                     done + 0.92,
                 )
+
+                subtitle_strategy = f"{effective_subtitle_source}/{('hit' if subtitle_hit else 'miss')}"
+                subtitle_convert = subtitle_convert_mode if effective_subtitle_source in {"local", "online"} else "n/a"
+                encoder_text = ",".join(sorted(row_encoder_names)) if row_encoder_names else "n/a"
+                encoder_kind_text = "+".join(sorted(row_encoder_kinds)) if row_encoder_kinds else "n/a"
+                self.logMessage.emit(
+                    f"[INFO] [EXPORT SUMMARY] [{name}] "
+                    f"result={('ok' if ok else 'failed')} "
+                    f"mode={row_export_mode} "
+                    f"subtitle={subtitle_strategy} "
+                    f"subtitle_convert={subtitle_convert} "
+                    f"encoder={encoder_text} ({encoder_kind_text})"
+                )
+
                 done += 1
                 if ok:
                     success += 1
@@ -9784,7 +10112,7 @@ class WebBridge(QObject):
                     "message": (
                         f"{self._t('video_export_done', ok=success, failed=failed)}\n{mode_note}\n{subtitle_note}".strip()
                     ),
-                    "path": str(output_dir),
+                    "path": str(reveal_target if reveal_target is not None else output_dir),
                     "can_reveal": self._can_reveal_saved_path(),
                 },
                 ensure_ascii=False,
