@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import concurrent.futures as futures
+import dataclasses
 import datetime as dt
 import json
 import logging
@@ -24,7 +25,7 @@ from PySide6.QtWidgets import QApplication, QFileDialog, QDialog, QHBoxLayout, Q
 
 from .blk_versions import parse_blk_versions
 from .exceptions import UsmDivinerError
-from .keys import parse_full_key
+from .keys import full_key_from_genshin_like_key, parse_full_key
 from .models import ProcessOptions
 from .processor import process_one
 from .tools import find_ffmpeg, find_vgmstream
@@ -1874,6 +1875,34 @@ HTML_TEMPLATE = r"""<!doctype html>
             min-height: 0;
         }
 
+        @keyframes video-export-spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+
+        .video-export-online-check-body {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 0;
+        }
+
+        .video-export-online-check-spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid var(--line);
+            border-top-color: var(--acc);
+            border-radius: 50%;
+            animation: video-export-spin 760ms linear infinite;
+        }
+
+        .video-export-online-check-progress {
+            color: var(--muted);
+            font-size: 11px;
+            text-align: center;
+        }
+
         #sync_result_modal .modal-head {
             justify-content: center;
         }
@@ -3170,6 +3199,21 @@ HTML_TEMPLATE = r"""<!doctype html>
         </div>
     </div>
 
+    <div id="video_export_online_check_modal" class="modal hidden">
+        <div class="modal-card save-success-card" style="max-width: 440px;">
+            <div class="modal-head">
+                <span id="video_export_online_check_title">Checking Online Subtitles</span>
+            </div>
+            <div class="save-success-body">
+                <div class="video-export-online-check-body">
+                    <div class="video-export-online-check-spinner" aria-hidden="true"></div>
+                    <div id="video_export_online_check_message" class="save-success-message">...</div>
+                    <div id="video_export_online_check_progress" class="video-export-online-check-progress">Checking... (0/0)</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
     <script>
         const I18N = JSON.parse(__TRANSLATIONS_JSON__);
@@ -3633,6 +3677,26 @@ HTML_TEMPLATE = r"""<!doctype html>
             bridge.startVideoExport(JSON.stringify(payload));
         }
 
+        function refreshVideoExportOnlineCheckProgressText() {
+            const dict = t(currentLang());
+            const template = String(dict.video_export_online_check_progress || "Checking... ({done}/{total})");
+            const text = template.replace("{done}", String(videoExportOnlineCheckDone)).replace("{total}", String(videoExportOnlineCheckTotal));
+            const elem = byId("video_export_online_check_progress");
+            if (elem) elem.textContent = text;
+        }
+
+        function onVideoExportSubtitleCoverageProgress(payloadJson) {
+            let payload = {};
+            try {
+                payload = JSON.parse(payloadJson || "{}");
+            } catch (_) {
+                payload = {};
+            }
+            videoExportOnlineCheckDone = Number(payload.done || 0);
+            videoExportOnlineCheckTotal = Number(payload.total || 0);
+            refreshVideoExportOnlineCheckProgressText();
+        }
+
         function proceedVideoExportWithPrompt(payload) {
             const promptInfo = getVideoExportSubtitlePromptInfo(payload);
             if (promptInfo) {
@@ -3658,9 +3722,15 @@ HTML_TEMPLATE = r"""<!doctype html>
                 return;
             }
             pendingVideoExportCoveragePayload = payload;
+            videoExportOnlineCheckDone = 0;
+            videoExportOnlineCheckTotal = (payload.candidates || []).length;
+            refreshVideoExportOnlineCheckProgressText();
+            byId("video_export_online_check_modal").classList.remove("hidden");
             bridge.checkVideoExportOnlineSubtitleCoverage(JSON.stringify(payload));
         }
 
+        let videoExportOnlineCheckDone = 0;
+        let videoExportOnlineCheckTotal = 0;
         let pendingVideoExportSubtitleMissingPayload = null;
         let cleanupProgressModel = { display: 0, target: 0, lastTick: Date.now() };
         let cleanupProgressPumpTimer = null;
@@ -3698,6 +3768,9 @@ HTML_TEMPLATE = r"""<!doctype html>
             } catch (_) {
                 payload = {};
             }
+            byId("video_export_online_check_modal").classList.add("hidden");
+            videoExportOnlineCheckDone = 0;
+            videoExportOnlineCheckTotal = 0;
             const pendingPayload = pendingVideoExportCoveragePayload;
             pendingVideoExportCoveragePayload = null;
             if (!pendingPayload) {
@@ -5399,6 +5472,7 @@ HTML_TEMPLATE = r"""<!doctype html>
             syncBlkParseToggle(false);
             syncVersionsPatchToggle(false);
             renderLogBox();
+            refreshVideoExportOnlineCheckProgressText();
             updateStatusStrip();
         }
 
@@ -6476,6 +6550,7 @@ HTML_TEMPLATE = r"""<!doctype html>
             bridge.videoExportProgress.connect(onVideoExportProgress);
             bridge.videoExportFinished.connect(onVideoExportFinished);
             bridge.videoExportSubtitleCoverageReady.connect(onVideoExportSubtitleCoverageReady);
+            bridge.videoExportSubtitleCoverageProgress.connect(onVideoExportSubtitleCoverageProgress);
             bridge.runStateChanged.connect(setRunning);
             bridge.exitPromptReady.connect(onExitPromptReady);
             bridge.cleanupProgressReady.connect(onCleanupProgress);
@@ -6823,6 +6898,7 @@ class WebBridge(QObject):
     videoExportProgress = Signal(str)
     videoExportFinished = Signal(str)
     videoExportSubtitleCoverageReady = Signal(str)
+    videoExportSubtitleCoverageProgress = Signal(str)
     runStateChanged = Signal(bool)
     windowTitleChanged = Signal(str)
     fieldChosen = Signal(str, str)
@@ -6845,6 +6921,7 @@ class WebBridge(QObject):
         self._worker: threading.Thread | None = None
         self._blk_worker: threading.Thread | None = None
         self._video_export_worker: threading.Thread | None = None
+        self._video_export_subtitle_probe_worker: threading.Thread | None = None
         self._cleanup_worker: threading.Thread | None = None
         self._blk_result_lock = threading.Lock()
         self._last_blk_result: dict | None = None
@@ -7022,6 +7099,13 @@ class WebBridge(QObject):
                     1,
                     1,
                 )
+            # Still delete registered output directories even with no intermediate files
+            for folder in sorted(dir_items, key=lambda p: len(str(p)), reverse=True):
+                if folder.exists():
+                    try:
+                        shutil.rmtree(folder)
+                    except OSError:
+                        pass
             return
 
         root = Path.cwd()
@@ -7073,7 +7157,21 @@ class WebBridge(QObject):
         cleanup_dirs: set[Path] = set()
         cleanup_dirs.update(path.parent for path in existing_files)
         cleanup_dirs.update(path for path in dir_items if path.exists() and path.is_dir())
+        
+        # Delete registered directories completely using shutil.rmtree
+        for folder in sorted(dir_items, key=lambda p: len(str(p)), reverse=True):
+            if not folder.exists():
+                continue
+            try:
+                shutil.rmtree(folder)
+            except OSError:
+                continue
+        
+        # Cleanup empty parent directories of deleted files
         for folder in sorted(cleanup_dirs, key=lambda p: len(str(p)), reverse=True):
+            # Skip folders that are in dir_items (already deleted)
+            if any(str(folder).startswith(str(d)) for d in dir_items):
+                continue
             try:
                 folder.rmdir()
             except OSError:
@@ -7158,6 +7256,13 @@ class WebBridge(QObject):
 
     def _run_cleanup_then_close(self) -> None:
         self.cleanup_generated_artifacts(progress_callback=self._emit_cleanup_progress)
+        # Always delete the output folder when program closes
+        output_dir = Path.cwd() / "output"
+        if output_dir.exists():
+            try:
+                shutil.rmtree(output_dir)
+            except OSError as exc:
+                logger.debug("failed to delete output folder: %s", exc)
         with self._close_state_lock:
             self._allow_window_close = True
         self.hostCloseRequested.emit()
@@ -7985,6 +8090,19 @@ class WebBridge(QObject):
                 return parsed, str(candidate)
         return {}, None
 
+    def _load_base_key_map(self) -> tuple[dict[str, int], str | None]:
+        for candidate in self._sync_template_candidates():
+            if not candidate.exists() or not candidate.is_file():
+                continue
+            try:
+                payload = json.loads(candidate.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            parsed = self._extract_key_map_from_versions_payload(payload)
+            if parsed:
+                return parsed, str(candidate)
+        return {}, None
+
     def _resolve_increment_target_path(self) -> Path | None:
         for candidate in self._increment_candidates():
             try:
@@ -8004,7 +8122,8 @@ class WebBridge(QObject):
             file_path = Path(file_text)
             if file_path.suffix.lower() == ".usm":
                 # Persist keys for original USM file names only.
-                names.add(file_path.name.lower())
+                # Normalize to strip .usm suffix so keys are consistent with _read_usm_key_increment_map.
+                names.add(self._norm_video_name(file_path.name))
 
         return names
 
@@ -9090,6 +9209,7 @@ class WebBridge(QObject):
             )
             return
         output_dir = Path(output_text)
+        self._register_generated_dir(output_dir)
 
         candidates = payload.get("candidates") if isinstance(payload.get("candidates"), list) else []
         subtitle_source = str(payload.get("subtitle_source") or "off").strip().lower()
@@ -9168,6 +9288,16 @@ class WebBridge(QObject):
 
     @Slot(str)
     def checkVideoExportOnlineSubtitleCoverage(self, payload_json: str) -> None:
+        if self._video_export_subtitle_probe_worker and self._video_export_subtitle_probe_worker.is_alive():
+            return
+        self._video_export_subtitle_probe_worker = threading.Thread(
+            target=self._run_video_export_subtitle_coverage_probe,
+            args=(payload_json,),
+            daemon=True,
+        )
+        self._video_export_subtitle_probe_worker.start()
+
+    def _run_video_export_subtitle_coverage_probe(self, payload_json: str) -> None:
         try:
             payload = json.loads(payload_json or "{}")
         except json.JSONDecodeError:
@@ -9182,11 +9312,22 @@ class WebBridge(QObject):
                 subtitle_languages.append(code)
         candidates = payload.get("candidates") if isinstance(payload.get("candidates"), list) else []
 
+        total = len(candidates)
+        self.videoExportSubtitleCoverageProgress.emit(
+            json.dumps(
+                {
+                    "done": 0,
+                    "total": total,
+                },
+                ensure_ascii=False,
+            )
+        )
+
         missing_names: list[str] = []
         if subtitle_source == "online" and subtitle_languages and candidates:
             with tempfile.TemporaryDirectory(prefix="usmdiviner_subtitle_probe_") as tmp:
                 cache_dir = Path(tmp)
-                for item in candidates:
+                for idx, item in enumerate(candidates):
                     name = str((item or {}).get("name") or "")
                     ivf_text = str((item or {}).get("ivf") or "")
                     stem = Path(name).stem or Path(ivf_text).stem
@@ -9199,6 +9340,16 @@ class WebBridge(QObject):
                             break
                     if not hit:
                         missing_names.append(Path(name).name or stem)
+                    
+                    self.videoExportSubtitleCoverageProgress.emit(
+                        json.dumps(
+                            {
+                                "done": idx + 1,
+                                "total": total,
+                            },
+                            ensure_ascii=False,
+                        )
+                    )
 
         self.videoExportSubtitleCoverageReady.emit(
             json.dumps(
@@ -9810,22 +9961,57 @@ class WebBridge(QObject):
             except ValueError as exc:
                 raise ValueError(self._t("manual_key_invalid", reason=exc)) from exc
 
-        # Resolve existing increment key before deciding crack path.
+        auto_file_keys: dict[str, int] = {}
+
+        # Resolve existing per-file key from base/increment maps before deciding crack path.
         if manual_key is None and input_files:
+            base_map, base_path = self._load_base_key_map()
             increment_map, _ = self._load_incremental_key_map()
-            if increment_map:
-                for usm_path in input_files:
-                    stem = self._norm_video_name(usm_path.stem)
-                    if stem in increment_map:
-                        key_val = increment_map[stem]
-                        manual_key = key_val
-                        self.logMessage.emit(
-                            self._t("process_key_from_increment", file=usm_path.name, usm_key=f"{key_val:016X}")
-                        )
-                        break
-            if manual_key is None:
+            miss_count = 0
+
+            for usm_path in input_files:
+                stem = self._norm_video_name(usm_path.stem)
+                mapped_key = None
+                source = ""
+
+                if stem in base_map:
+                    mapped_key = base_map[stem]
+                    source = "base"
+                    self.logMessage.emit(
+                        self._t("process_key_from_base", file=usm_path.name, usm_key=f"{mapped_key:016X}", path=base_path)
+                    )
+                elif stem in increment_map:
+                    mapped_key = increment_map[stem]
+                    source = "increment"
+                    self.logMessage.emit(
+                        self._t("process_key_from_increment", file=usm_path.name, usm_key=f"{mapped_key:016X}")
+                    )
+
+                if mapped_key is None:
+                    miss_count += 1
+                    continue
+
+                # Base/increment stores genshin-like key; convert back to full key for decryption masks.
+                full_key = full_key_from_genshin_like_key(mapped_key, usm_path.name)
+                try:
+                    path_key = str(usm_path.resolve())
+                except OSError:
+                    path_key = str(usm_path)
+                auto_file_keys[path_key] = full_key
                 self.logMessage.emit(
-                    self._t("process_key_from_increment_miss", count=len(input_files))
+                    f"[INFO] auto key converted for {usm_path.name}: mapped={mapped_key:016X} -> full={full_key:016X}"
+                )
+                logger.debug(
+                    "[AUTO KEY] %s source=%s mapped=%016X full=%016X",
+                    usm_path.name,
+                    source,
+                    mapped_key,
+                    full_key,
+                )
+
+            if miss_count > 0:
+                self.logMessage.emit(
+                    self._t("process_key_from_maps_miss", count=miss_count)
                 )
 
         if manual_key is not None and fast:
@@ -9858,6 +10044,7 @@ class WebBridge(QObject):
             "input_path": input_path if input_mode == "batch" else input_files[0],
             "input_files": input_files if input_mode == "single" else None,
             "opt": opt,
+            "auto_file_keys": auto_file_keys,
             "no_parallel": no_parallel,
         }
 
@@ -9931,6 +10118,7 @@ class WebBridge(QObject):
             input_path: Path = config["input_path"]
             input_files: list[Path] | None = config.get("input_files")
             opt: ProcessOptions = config["opt"]
+            auto_file_keys: dict[str, int] = config.get("auto_file_keys") or {}
             no_parallel: bool = config["no_parallel"]
             with self._reports_lock:
                 self._reports_by_id.clear()
@@ -9968,6 +10156,7 @@ class WebBridge(QObject):
             )
 
             Path(opt.output_dir).mkdir(parents=True, exist_ok=True)
+            self._register_generated_dir(Path(opt.output_dir))
             max_workers = max(os.cpu_count() or 1, 1)
             use_parallel = (not no_parallel) and max_workers > 1 and len(files) > 1
 
@@ -10044,8 +10233,17 @@ class WebBridge(QObject):
                 with futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
                     fut_map = {}
                     for path in files:
+                        try:
+                            path_key = str(path.resolve())
+                        except OSError:
+                            path_key = str(path)
+                        effective_manual_key = opt.manual_key
+                        if effective_manual_key is None:
+                            effective_manual_key = auto_file_keys.get(path_key)
+                        run_opt = dataclasses.replace(opt, manual_key=effective_manual_key)
+
                         row_id = path_to_id.get(str(path), "")
-                        stage_plan = self._stage_plan(opt)
+                        stage_plan = self._stage_plan(run_opt)
                         announced_stage_logs: set[str] = set()
                         if row_id:
                             emit_row_progress(row_id, path.name, 6)
@@ -10053,7 +10251,7 @@ class WebBridge(QObject):
                         fut = executor.submit(
                             process_one,
                             str(path),
-                            opt,
+                            run_opt,
                             make_progress_callback(row_id, path.name, stage_plan, announced_stage_logs)
                             if row_id
                             else None,
@@ -10084,16 +10282,25 @@ class WebBridge(QObject):
                             self.logMessage.emit(detail)
             else:
                 for path in files:
+                    try:
+                        path_key = str(path.resolve())
+                    except OSError:
+                        path_key = str(path)
+                    effective_manual_key = opt.manual_key
+                    if effective_manual_key is None:
+                        effective_manual_key = auto_file_keys.get(path_key)
+                    run_opt = dataclasses.replace(opt, manual_key=effective_manual_key)
+
                     row_id = path_to_id.get(str(path), "")
                     self.logMessage.emit(self._t("process_start_line", file=path.name))
-                    stage_plan = self._stage_plan(opt)
+                    stage_plan = self._stage_plan(run_opt)
                     announced_stage_logs: set[str] = set()
                     if row_id:
                         emit_row_progress(row_id, path.name, 8)
                     try:
                         report = process_one(
                             str(path),
-                            opt,
+                            run_opt,
                             progress_callback=make_progress_callback(row_id, path.name, stage_plan, announced_stage_logs)
                             if row_id
                             else None,
