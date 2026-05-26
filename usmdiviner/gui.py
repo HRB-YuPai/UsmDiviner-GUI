@@ -1194,9 +1194,12 @@ HTML_TEMPLATE = r"""<!doctype html>
         }
 
         .log-box {
-            cursor: default;
+            cursor: text;
             user-select: text;
             -webkit-user-select: text;
+            -moz-user-select: text;
+            white-space: pre-wrap;
+            word-wrap: break-word;
         }
 
         .table-wrap::-webkit-scrollbar,
@@ -2477,6 +2480,29 @@ HTML_TEMPLATE = r"""<!doctype html>
             text-align: center;
         }
 
+        /* FFMPEG Log Modal CSS */
+        .ffmpeg-log-card {
+            width: min(800px, 92vw);
+            max-height: min(600px, 88vh);
+            display: flex;
+            flex-direction: column;
+        }
+
+        .ffmpeg-log-card .modal-head {
+            justify-content: center;
+            text-align: center;
+        }
+
+        .ffmpeg-log-card #ffmpeg_log_box {
+            flex: 1;
+            overflow-y: auto;
+            min-height: 200px;
+        }
+
+        .ffmpeg-log-card .modal-actions {
+            margin-top: 10px;
+        }
+
         .settings-group {
             margin-bottom: 0;
             padding-bottom: 0;
@@ -3133,8 +3159,25 @@ HTML_TEMPLATE = r"""<!doctype html>
                 </div>
             </div>
             <div class="modal-actions">
+                <button class="btn" id="video_export_ffmpeg_log_btn" onclick="openFfmpegLogModal()" disabled></button>
                 <button class="btn" id="video_export_start_btn" onclick="startVideoExport()">Start Export</button>
                 <button class="btn" id="video_export_close_btn" onclick="closeVideoExportModal()">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- FFMPEG 日志模态框 -->
+    <div id="ffmpeg_log_modal" class="modal hidden">
+        <div class="modal-card ffmpeg-log-card">
+            <div class="modal-head">
+                <span id="ffmpeg_log_window_title">FFMPEG Log</span>
+            </div>
+            <div id="ffmpeg_log_box" class="log-box"></div>
+            <div class="modal-actions">
+                <button class="btn" id="ffmpeg_copy_log_btn" onclick="copyFfmpegLogSelectionOrAll()" disabled>Copy</button>
+                <button class="btn" id="ffmpeg_export_log_btn" onclick="exportFfmpegLog()" disabled>Export</button>
+                <button class="btn" id="ffmpeg_clear_log_btn" onclick="clearFfmpegLog()" disabled>Clear log</button>
+                <button class="btn" id="ffmpeg_close_log_btn" onclick="closeFfmpegLogModal()">Close</button>
             </div>
         </div>
     </div>
@@ -3263,18 +3306,19 @@ HTML_TEMPLATE = r"""<!doctype html>
     </div>
 
     <div id="cleanup_progress_modal" class="modal hidden">
-        <div class="modal-card save-success-card" style="max-width: 420px;">
+        <div class="modal-card save-success-card" style="max-width: 480px;">
             <div class="modal-head">
                 <span id="cleanup_progress_modal_title">Cleaning generated files...</span>
             </div>
-            <div class="save-success-body" style="gap: 6px; padding: 12px 14px;">
-                <div style="display: flex; flex-direction: column; gap: 2px; font-size: 12px;">
-                    <div id="cleanup_progress_status" style="color: var(--muted);"></div>
-                    <div id="cleanup_progress_file" style="color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 11px;"></div>
+            <div class="save-success-body" style="gap: 8px; padding: 14px 16px;">
+                <div style="display: flex; flex-direction: column; gap: 3px; font-size: 12px;">
+                    <div id="cleanup_progress_status" style="color: var(--muted); font-weight: 500;"></div>
+                    <div id="cleanup_progress_file" style="color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 11px; opacity: 0.85;"></div>
+                    <div id="cleanup_progress_stats" style="color: var(--muted); font-size: 10px; margin-top: 2px;"></div>
                 </div>
                 <div style="display: flex; align-items: center; gap: 8px;">
-                    <div class="progress-track" style="flex: 1; height: 6px; margin: 0;"><div id="cleanup_progress_fill" class="progress-fill" style="width: 0%; height: 100%; background: linear-gradient(90deg, var(--acc), #69d89f); transition: width 100ms linear;"></div></div>
-                    <div id="cleanup_progress_percentage" style="color: var(--muted); font-size: 11px; min-width: 36px; text-align: right;">0%</div>
+                    <div class="progress-track" style="flex: 1; height: 8px; margin: 0; border-radius: 2px; background: var(--bg2);"><div id="cleanup_progress_fill" class="progress-fill" style="width: 0%; height: 100%; background: linear-gradient(90deg, #3edc81, #69d89f); transition: width 150ms cubic-bezier(0.4, 0.2, 0.2, 1); border-radius: 2px;"></div></div>
+                    <div id="cleanup_progress_percentage" style="color: var(--muted); font-size: 12px; font-weight: 500; min-width: 40px; text-align: right;">0%</div>
                 </div>
             </div>
         </div>
@@ -3342,6 +3386,11 @@ HTML_TEMPLATE = r"""<!doctype html>
         let lastLogTs = 0;
         let customSelectInstances = new Map();
         let hoverTooltipVisible = false;
+        // FFMPEG 日志专用容器
+        let ffmpegLogLines = [];
+        let lastFfmpegLogLine = null;
+        let lastFfmpegLogTs = 0;
+        let ffmpegLoggingActive = false;
 
         function byId(id) { return document.getElementById(id); }
 
@@ -3622,11 +3671,14 @@ HTML_TEMPLATE = r"""<!doctype html>
 
         function updateVideoExportStartButtonState() {
             const startBtn = byId("video_export_start_btn");
+            const logBtn = byId("video_export_ffmpeg_log_btn");
             if (!startBtn) return;
             const hasCandidates = Array.isArray(videoExportCandidates) && videoExportCandidates.length > 0;
             const outputEl = byId("video_export_output");
             const hasOutput = String((outputEl && outputEl.value) || "").trim().length > 0;
             startBtn.disabled = !!videoExportRunning || !hasCandidates || !hasOutput;
+            // FFMPEG Log button is only enabled during export
+            if (logBtn) logBtn.disabled = !videoExportRunning;
         }
 
         function updateVideoExportSubtitleLocalInfo() {
@@ -3833,7 +3885,8 @@ HTML_TEMPLATE = r"""<!doctype html>
             cleanupProgressPumpTimer = null;
             const now = Date.now();
             const dtSec = Math.max(0.016, Math.min(0.2, (now - (cleanupProgressModel.lastTick || now)) / 1000));
-            const urgency = cleanupProgressModel.target >= 99 ? 3.2 : 1.0;
+            // Faster progress for cleanup (up to 4x speed when near 100%)
+            const urgency = cleanupProgressModel.target >= 99 ? 4.0 : (cleanupProgressModel.target >= 80 ? 2.5 : 1.2);
             cleanupProgressModel.display = _advanceProgress(
                 Number(cleanupProgressModel.display || 0),
                 Number(cleanupProgressModel.target || 0),
@@ -3845,7 +3898,7 @@ HTML_TEMPLATE = r"""<!doctype html>
             const pctText = byId("cleanup_progress_percentage");
             if (fill) fill.style.width = `${cleanupProgressModel.display}%`;
             if (pctText) pctText.textContent = formatProgressText(cleanupProgressModel.display);
-            if (Math.abs(Number(cleanupProgressModel.target || 0) - cleanupProgressModel.display) >= 0.15) {
+            if (Math.abs(Number(cleanupProgressModel.target || 0) - cleanupProgressModel.display) >= 0.1) {
                 _ensureCleanupProgressPump();
             }
         }
@@ -5232,6 +5285,7 @@ HTML_TEMPLATE = r"""<!doctype html>
         }
 
         function openVideoExportModal() {
+            resetFfmpegLog();
             renderVideoExportRows();
             refreshVideoExportAudioSummary();
             refreshVideoExportSubtitleLangSummary();
@@ -5345,6 +5399,23 @@ HTML_TEMPLATE = r"""<!doctype html>
             renderVideoExportButton();
         }
 
+        /**
+         * 计算多视频的平均进度
+         * @returns 0-100 的百分比
+         */
+        function calculateAverageVideoProgress() {
+            if (videoExportRows.size === 0) return 0;
+
+            let totalProgress = 0;
+            videoExportRows.forEach((row) => {
+                const progress = Math.max(0, Math.min(100, Number(row.progressTarget || row.progress || 0)));
+                totalProgress += progress;
+            });
+            
+            const average = totalProgress / videoExportRows.size;
+            return Math.round(average);
+        }
+
         function onVideoExportProgress(payloadJson) {
             let payload = {};
             try {
@@ -5353,7 +5424,9 @@ HTML_TEMPLATE = r"""<!doctype html>
                 payload = {};
             }
             updateVideoExportRowProgress(payload.id, payload.progress, payload.status);
-            setVideoExportOverallProgress(payload.done || 0, payload.total || 1);
+            // 使用平均进度而非简单 done/total
+            const avgProgress = calculateAverageVideoProgress();
+            setVideoExportOverallProgress(avgProgress, 100);
         }
 
         function onVideoExportFinished(payloadJson) {
@@ -5561,6 +5634,7 @@ HTML_TEMPLATE = r"""<!doctype html>
             setText("video_export_th_audio", dict.video_export_audio || "Audio");
             setText("video_export_th_progress", dict.table_progress || "Progress");
             setText("video_export_overall_label", dict.overall_progress || "Overall progress");
+            setText("video_export_ffmpeg_log_btn", dict.video_export_ffmpeg_log || "FFMPEG Log");
             setText("video_export_start_btn", dict.video_export_start || "Start Export");
             setText("video_export_close_btn", dict.close || "Close");
             setPlaceholder("output", dict.placeholder_output);
@@ -5756,6 +5830,131 @@ HTML_TEMPLATE = r"""<!doctype html>
             byId("log_modal").classList.add("hidden");
         }
 
+        /* ============ FFMPEG 日志管理函数 ============ */
+        function appendFfmpegLog(line) {
+            if (!ffmpegLoggingActive || (line || "").trim().length === 0) {
+                return;
+            }
+            lastFfmpegLogLine = line;
+            lastFfmpegLogTs = Date.now();
+            ffmpegLogLines.push(line);
+            if (!byId("ffmpeg_log_modal").classList.contains("hidden")) {
+                renderFfmpegLogBox();
+            }
+        }
+
+        function hasFfmpegUsableLogs() {
+            return ffmpegLogLines.some((line) => (line || "").trim().length > 0);
+        }
+
+        function updateFfmpegLogUiState() {
+            const copyBtn = byId("ffmpeg_copy_log_btn");
+            const exportBtn = byId("ffmpeg_export_log_btn");
+            const clearBtn = byId("ffmpeg_clear_log_btn");
+            const hasLogs = hasFfmpegUsableLogs();
+            if (copyBtn) copyBtn.disabled = !hasLogs;
+            if (exportBtn) exportBtn.disabled = !hasLogs;
+            if (clearBtn) clearBtn.disabled = !hasLogs;
+        }
+
+        function renderFfmpegLogBox() {
+            const box = byId("ffmpeg_log_box");
+            if (!box) return;
+            if (!hasFfmpegUsableLogs()) {
+                box.classList.add("empty");
+                const dict = t(currentLang());
+                box.textContent = dict.log_empty_placeholder || "No logs";
+            } else {
+                box.classList.remove("empty");
+                box.textContent = ffmpegLogLines.join("\n");
+                box.scrollTop = box.scrollHeight;
+            }
+            updateFfmpegLogUiState();
+        }
+
+        function clearFfmpegLog() {
+            if (!hasFfmpegUsableLogs()) {
+                updateFfmpegLogUiState();
+                return;
+            }
+            ffmpegLogLines = [];
+            lastFfmpegLogLine = null;
+            lastFfmpegLogTs = 0;
+            renderFfmpegLogBox();
+        }
+
+        function exportFfmpegLog() {
+            const dict = t(currentLang());
+            if (!hasFfmpegUsableLogs()) {
+                showCopyToast(dict.export_log_empty || "No logs to export.");
+                return;
+            }
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+            const filename = `FFmpeg_Log_${timestamp}.txt`;
+            const content = ffmpegLogLines.join("\n");
+            if (bridge && bridge.exportFfmpegLog) {
+                bridge.exportFfmpegLog(filename, content);
+            } else {
+                // Fallback：使用 blob 下载
+                const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = filename;
+                a.click();
+                URL.revokeObjectURL(url);
+                showCopyToast(dict.log_exported || "Log exported");
+            }
+        }
+
+        function copyFfmpegLogSelectionOrAll() {
+            const dict = t(currentLang());
+            const box = byId("ffmpeg_log_box");
+            if (!box) return;
+            const selection = (window.getSelection && window.getSelection().toString()) || "";
+            const text = selection ? selection : ffmpegLogLines.join("\n").trim();
+            if (!text) {
+                showCopyToast(dict.copy_log_empty || "Nothing to copy.");
+                return;
+            }
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(text).then(() => {
+                    const dict_local = t(currentLang());
+                    showCopyToast(dict_local.cell_copied || "Copied");
+                }).catch(err => {
+                    console.error("Clipboard error:", err);
+                });
+            } else {
+                // Fallback 用于不支持 clipboard API 的浏览器
+                const textarea = document.createElement("textarea");
+                textarea.value = text;
+                document.body.appendChild(textarea);
+                textarea.select();
+                document.execCommand("copy");
+                document.body.removeChild(textarea);
+                showCopyToast(dict.cell_copied || "Copied");
+            }
+        }
+
+        function openFfmpegLogModal() {
+            ffmpegLoggingActive = true;
+            renderFfmpegLogBox();
+            byId("ffmpeg_log_modal").classList.remove("hidden");
+        }
+
+        function closeFfmpegLogModal() {
+            ffmpegLoggingActive = false;
+            byId("ffmpeg_log_modal").classList.add("hidden");
+        }
+
+        function resetFfmpegLog() {
+            ffmpegLogLines = [];
+            ffmpegLoggingActive = false;
+            lastFfmpegLogLine = null;
+            lastFfmpegLogTs = 0;
+            updateFfmpegLogUiState();
+        }
+
         function openUsageModal() {
             byId("usage_modal").classList.remove("hidden");
         }
@@ -5829,11 +6028,21 @@ HTML_TEMPLATE = r"""<!doctype html>
             }
             const done = Math.max(0, Number(payload.done || 0));
             const total = Math.max(1, Number(payload.total || 1));
+            const removed = Math.max(0, Number(payload.removed || 0));
+            const failed = Math.max(0, Number(payload.failed || 0));
             const pct = Math.max(0, Math.min(100, (done * 100) / total));
             const file = String(payload.file || "").trim();
-            const fileDisplay = file ? ` - ${file}` : "";
+            
             setText("cleanup_progress_modal_title", payload.title || "");
-            setText("cleanup_progress_status", (payload.status || "") + fileDisplay);
+            setText("cleanup_progress_status", payload.status || "");
+            setText("cleanup_progress_file", file);
+            
+            // Show statistics: Removed X / Failed Y / Total Z
+            const statsText = done > 0 
+                ? `✓ Removed: ${removed} | ✗ Failed: ${failed} | Total: ${total}`
+                : `Total files: ${total}`;
+            setText("cleanup_progress_stats", statsText);
+            
             cleanupProgressModel.target = pct >= 100 ? 100 : Math.max(Number(cleanupProgressModel.target || 0), pct);
             _ensureCleanupProgressPump();
             if (byId("cleanup_progress_modal").classList.contains("hidden")) {
@@ -6724,6 +6933,7 @@ HTML_TEMPLATE = r"""<!doctype html>
             setupVideoExportAudioSelect();
             setupVideoExportSubtitleSelect();
             bridge.logMessage.connect(appendLog);
+            bridge.ffmpegLogMessage.connect(appendFfmpegLog);
             bridge.uiToast.connect(showCopyToast);
             bridge.syncResultReady.connect(onSyncResultReady);
             bridge.blkSavePromptReady.connect(onBlkSavePromptReady);
@@ -7072,6 +7282,7 @@ class _MainView(QWebEngineView):
 
 class WebBridge(QObject):
     logMessage = Signal(str)
+    ffmpegLogMessage = Signal(str)
     uiToast = Signal(str)
     syncResultReady = Signal(str)
     blkSavePromptReady = Signal(str)
@@ -7225,160 +7436,123 @@ class WebBridge(QObject):
             file_items = [Path(p) for p in sorted(self._generated_files)]
             dir_items = [Path(p) for p in sorted(self._generated_dirs)]
 
-        # Never delete entire directories during cleanup. User-selected export
-        # folders can be outside workspace and must not be removed.
-
-        def _is_intermediate_artifact(path: Path) -> bool:
-            name = path.name.lower()
-            suffix = path.suffix.lower()
-            if name.endswith(".hcakey") or name.endswith(".adxkey"):
-                return True
-            return suffix in {
-                ".ivf",
-                ".264",
-                ".h264",
-                ".m1v",
-                ".hca",
-                ".adx",
-                ".wav",
-            }
-
-        candidate_files: set[Path] = set(path for path in file_items if path.exists() and path.is_file())
-        intermediate_patterns = (
-            "*.hcakey",
-            "*.adxkey",
-            "*.hca",
-            "*.adx",
-            "*.wav",
-            "*.ivf",
-            "*.264",
-            "*.h264",
-            "*.m1v",
-        )
-        for folder in dir_items:
-            if not folder.exists() or not folder.is_dir():
-                continue
-            for pattern in intermediate_patterns:
-                for discovered in folder.rglob(pattern):
-                    if discovered.is_file():
-                        candidate_files.add(discovered)
-
-        existing_files = sorted(
-            [path for path in candidate_files if _is_intermediate_artifact(path)],
-            key=lambda p: str(p),
-        )
-        total = len(existing_files)
-        if total <= 0:
-            if dialog:
-                dialog.update_step(
-                    self._t("cleanup_dialog_done", removed=0, failed=0),
-                    self._t("cleanup_file_none"),
-                    "",
-                    1,
-                    1,
-                )
-            if callable(progress_callback):
-                progress_callback(
-                    self._t("cleanup_dialog_done", removed=0, failed=0),
-                    self._t("cleanup_file_none"),
-                    "",
-                    1,
-                    1,
-                )
-            # Still delete registered output directories even with no intermediate files
-            for folder in sorted(dir_items, key=lambda p: len(str(p)), reverse=True):
-                if folder.exists():
-                    try:
-                        shutil.rmtree(folder)
-                    except OSError:
-                        pass
-            return
-
-        root = Path.cwd()
-        removed = 0
-        failed = 0
-        for idx, path in enumerate(existing_files, 1):
-            try:
-                relative_path = str(path.relative_to(root))
-            except ValueError:
-                relative_path = str(path)
-            if dialog:
-                dialog.update_step(
-                    self._t("cleanup_dialog_progress", done=idx, total=total),
-                    f"{self._t('cleanup_file_label')} {path.name}",
-                    f"{self._t('cleanup_relative_path_label')} {relative_path}",
-                    idx - 1,
-                    total,
-                )
-            if callable(progress_callback):
-                progress_callback(
-                    self._t("cleanup_dialog_progress", done=idx, total=total),
-                    f"{self._t('cleanup_file_label')} {path.name}",
-                    f"{self._t('cleanup_relative_path_label')} {relative_path}",
-                    idx - 1,
-                    total,
-                )
-            try:
-                path.unlink()
-                removed += 1
-            except OSError:
-                failed += 1
-            if dialog:
-                dialog.update_step(
-                    self._t("cleanup_dialog_progress", done=idx, total=total),
-                    f"{self._t('cleanup_file_label')} {path.name}",
-                    f"{self._t('cleanup_relative_path_label')} {relative_path}",
-                    idx,
-                    total,
-                )
-            if callable(progress_callback):
-                progress_callback(
-                    self._t("cleanup_dialog_progress", done=idx, total=total),
-                    f"{self._t('cleanup_file_label')} {path.name}",
-                    f"{self._t('cleanup_relative_path_label')} {relative_path}",
-                    idx,
-                    total,
-                )
-
-        cleanup_dirs: set[Path] = set()
-        cleanup_dirs.update(path.parent for path in existing_files)
-        cleanup_dirs.update(path for path in dir_items if path.exists() and path.is_dir())
+        # Parallel directory deletion using ThreadPoolExecutor
+        max_workers = min(12, (os.cpu_count() or 1) * 2)
         
-        # Delete registered directories completely using shutil.rmtree
-        for folder in sorted(dir_items, key=lambda p: len(str(p)), reverse=True):
-            if not folder.exists():
-                continue
+        def _delete_dir_tree(folder: Path) -> bool:
+            if not folder.exists() or not folder.is_dir():
+                return True
             try:
                 shutil.rmtree(folder)
+                return True
             except OSError:
-                continue
+                return False
         
-        # Cleanup empty parent directories of deleted files
-        for folder in sorted(cleanup_dirs, key=lambda p: len(str(p)), reverse=True):
-            # Skip folders that are in dir_items (already deleted)
-            if any(str(folder).startswith(str(d)) for d in dir_items):
-                continue
+        def _delete_file(path: Path) -> bool:
             try:
-                folder.rmdir()
+                path.unlink()
+                return True
             except OSError:
-                continue
-
-        if dialog:
-            dialog.update_step(
-                self._t("cleanup_dialog_done", removed=removed, failed=failed),
-                self._t("cleanup_file_none"),
-                "",
-                total,
-                total,
-            )
+                return False
+        
+        # Fast path: if we have registered dirs, delete them in parallel
+        # This covers most intermediate files and folders
+        if dir_items:
+            with futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                dir_futures = [executor.submit(_delete_dir_tree, d) for d in dir_items]
+                # Wait for all directory deletions to complete
+                futures.wait(dir_futures)
+        
+        # Delete remaining registered files in parallel
+        existing_files = [p for p in file_items if p.exists() and p.is_file()]
+        total = len(existing_files)
+        
+        if total > 0:
+            removed = 0
+            failed = 0
+            update_interval = max(1, total // 10)  # Update ~10 times
+            
+            with futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                file_futures = {executor.submit(_delete_file, p): (idx, p) for idx, p in enumerate(existing_files, 1)}
+                
+                # Process completed tasks
+                completed_count = 0
+                for future in futures.as_completed(file_futures):
+                    idx, path = file_futures[future]
+                    try:
+                        success = future.result()
+                        if success:
+                            removed += 1
+                        else:
+                            failed += 1
+                    except Exception:
+                        failed += 1
+                    
+                    completed_count += 1
+                    # Throttle progress updates to reduce overhead
+                    if completed_count % update_interval == 0 or completed_count == total:
+                        try:
+                            relative_path = str(path.relative_to(Path.cwd()))
+                        except ValueError:
+                            relative_path = str(path)
+                        
+                        if callable(progress_callback):
+                            try:
+                                progress_callback(
+                                    self._t("cleanup_dialog_progress", done=completed_count, total=total),
+                                    f"{self._t('cleanup_file_label')} {path.name}",
+                                    f"{self._t('cleanup_relative_path_label')} {relative_path}",
+                                    completed_count,
+                                    total,
+                                    removed,
+                                    failed,
+                                )
+                            except TypeError:
+                                # Fallback
+                                progress_callback(
+                                    self._t("cleanup_dialog_progress", done=completed_count, total=total),
+                                    f"{self._t('cleanup_file_label')} {path.name}",
+                                    f"{self._t('cleanup_relative_path_label')} {relative_path}",
+                                    completed_count,
+                                    total,
+                                )
+            
+            # Final cleanup: remove empty parent directories
+            parent_dirs: set[Path] = set()
+            for path in existing_files:
+                try:
+                    parent_dirs.add(path.parent)
+                except Exception:
+                    pass
+            
+            # Delete empty dirs in reverse order (deepest first)
+            for folder in sorted(parent_dirs, key=lambda p: len(str(p)), reverse=True):
+                if folder.exists() and folder.is_dir():
+                    try:
+                        folder.rmdir()
+                    except OSError:
+                        pass
+        
+        # Final status callback
         if callable(progress_callback):
-            progress_callback(
-                self._t("cleanup_dialog_done", removed=removed, failed=failed),
-                self._t("cleanup_file_none"),
-                "",
-                total,
-                total,
-            )
+            try:
+                progress_callback(
+                    self._t("cleanup_dialog_done", removed=total, failed=0),
+                    self._t("cleanup_file_none"),
+                    "",
+                    total or 1,
+                    total or 1,
+                    total,
+                    0,
+                )
+            except TypeError:
+                progress_callback(
+                    self._t("cleanup_dialog_done", removed=total, failed=0),
+                    self._t("cleanup_file_none"),
+                    "",
+                    total or 1,
+                    total or 1,
+                )
 
     @Slot()
     def reloadStyle(self) -> None:
@@ -7428,7 +7602,7 @@ class WebBridge(QObject):
         }
         self.exitPromptReady.emit(json.dumps(payload, ensure_ascii=False))
 
-    def _emit_cleanup_progress(self, status_text: str, file_name: str, relative_path: str, done: int, total: int) -> None:
+    def _emit_cleanup_progress(self, status_text: str, file_name: str, relative_path: str, done: int, total: int, removed: int = 0, failed: int = 0) -> None:
         payload = {
             "title": self._t("cleanup_dialog_title"),
             "status": status_text,
@@ -7436,6 +7610,8 @@ class WebBridge(QObject):
             "relative_path": relative_path,
             "done": int(done),
             "total": int(max(1, total)),
+            "removed": int(removed),
+            "failed": int(failed),
         }
         self.cleanupProgressReady.emit(json.dumps(payload, ensure_ascii=False))
         QApplication.processEvents()
@@ -9135,6 +9311,31 @@ class WebBridge(QObject):
             )
         )
 
+    @Slot(str, str)
+    def exportFfmpegLog(self, suggested_name: str, content: str) -> None:
+        """Export FFMPEG log to file."""
+        base_dir = ASSETS_DIR.parent.resolve()
+        fallback_name = Path(str(suggested_name or "").strip() or "ffmpeg-log.txt").name
+        default_path = str(base_dir / fallback_name)
+
+        target_path, _ = QFileDialog.getSaveFileName(
+            None,
+            "Save FFMPEG Log",
+            default_path,
+            "Text (*.txt);;All files (*.*)",
+        )
+        if not target_path:
+            target_path = default_path
+
+        try:
+            Path(target_path).write_text(str(content or ""), encoding="utf-8")
+        except OSError as exc:
+            logger.error(f"Failed to export FFMPEG log: {exc}")
+            return
+
+        logger.info(f"FFMPEG log exported: {target_path}")
+        self._register_generated_file(Path(target_path))
+
     @staticmethod
     def _build_index_item(report: dict[str, Any]) -> dict[str, Any]:
         item: dict[str, Any] = {
@@ -9606,6 +9807,14 @@ class WebBridge(QObject):
             )
         )
 
+    def _emit_ffmpeg_log(self, log_text: str) -> None:
+        """Emit FFMPEG log lines to the frontend."""
+        if not log_text or not str(log_text).strip():
+            return
+        for line in str(log_text).splitlines():
+            if line.strip():
+                self.ffmpegLogMessage.emit(line)
+
     def _run_video_export_safe(
         self,
         fmt: str,
@@ -10003,9 +10212,13 @@ class WebBridge(QObject):
                             done + 0.68,
                         )
                         ok, detail = _export_one(out, subtitle_inputs, "container")
+                        if detail:
+                            self._emit_ffmpeg_log(detail)
                         if (not ok) and subtitle_inputs:
                             self.logMessage.emit(f"[WARN] [{name}] container export with subtitles failed, retrying without subtitles: {detail}")
                             ok, detail = _export_one(out, [], "container")
+                            if detail:
+                                self._emit_ffmpeg_log(detail)
                         _mark_output(out, ok)
                         if not ok and detail:
                             self.logMessage.emit(f"[ERROR] [{name}] export failed: {detail}")
@@ -10023,6 +10236,8 @@ class WebBridge(QObject):
                                 out = output_dir / f"{stem}{suffix}{ext}"
                                 self.logMessage.emit(f"[INFO] [{name}] burn export start ({lang or 'SUB'}) -> {out}")
                                 one_ok, detail = _export_one(out, [(sub_path, lang)], "burn")
+                                if detail:
+                                    self._emit_ffmpeg_log(detail)
                                 _mark_output(out, one_ok)
                                 if not one_ok and detail:
                                     self.logMessage.emit(f"[ERROR] [{name}] burn export failed ({lang or 'SUB'}): {detail}")
@@ -10031,6 +10246,8 @@ class WebBridge(QObject):
                             out = output_dir / f"{stem}{ext}"
                             self.logMessage.emit(f"[INFO] [{name}] export start (no subtitles) -> {out}")
                             ok, detail = _export_one(out, [], "container")
+                            if detail:
+                                self._emit_ffmpeg_log(detail)
                             _mark_output(out, ok)
                             if not ok and detail:
                                 self.logMessage.emit(f"[ERROR] [{name}] export failed: {detail}")
@@ -10044,9 +10261,13 @@ class WebBridge(QObject):
                             done + 0.68,
                         )
                         ok_container, detail = _export_one(base_out, subtitle_inputs, "container")
+                        if detail:
+                            self._emit_ffmpeg_log(detail)
                         if (not ok_container) and subtitle_inputs:
                             self.logMessage.emit(f"[WARN] [{name}] hybrid container leg with subtitles failed, retrying without subtitles: {detail}")
                             ok_container, detail = _export_one(base_out, [], "container")
+                            if detail:
+                                self._emit_ffmpeg_log(detail)
                         _mark_output(base_out, ok_container)
                         if not ok_container and detail:
                             self.logMessage.emit(f"[ERROR] [{name}] hybrid container leg failed: {detail}")
@@ -10058,6 +10279,8 @@ class WebBridge(QObject):
                                 out = output_dir / f"{stem}{suffix}{ext}"
                                 self.logMessage.emit(f"[INFO] [{name}] hybrid burn start ({lang or 'SUB'}) -> {out}")
                                 one_ok, detail = _export_one(out, [(sub_path, lang)], "burn")
+                                if detail:
+                                    self._emit_ffmpeg_log(detail)
                                 _mark_output(out, one_ok)
                                 if not one_ok and detail:
                                     self.logMessage.emit(f"[ERROR] [{name}] hybrid burn leg failed ({lang or 'SUB'}): {detail}")
