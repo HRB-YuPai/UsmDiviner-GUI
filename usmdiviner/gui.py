@@ -3159,7 +3159,7 @@ HTML_TEMPLATE = r"""<!doctype html>
                 </div>
             </div>
             <div class="modal-actions">
-                <button class="btn" id="video_export_ffmpeg_log_btn" onclick="openFfmpegLogModal()" disabled></button>
+                <button class="btn" id="video_export_ffmpeg_log_btn" onclick="openFfmpegLogModal()"></button>
                 <button class="btn" id="video_export_start_btn" onclick="startVideoExport()">Start Export</button>
                 <button class="btn" id="video_export_close_btn" onclick="closeVideoExportModal()">Close</button>
             </div>
@@ -3677,8 +3677,8 @@ HTML_TEMPLATE = r"""<!doctype html>
             const outputEl = byId("video_export_output");
             const hasOutput = String((outputEl && outputEl.value) || "").trim().length > 0;
             startBtn.disabled = !!videoExportRunning || !hasCandidates || !hasOutput;
-            // FFMPEG Log button is only enabled during export
-            if (logBtn) logBtn.disabled = !videoExportRunning;
+            // FFMPEG Log button is always enabled, user can view logs anytime
+            if (logBtn) logBtn.disabled = false;
         }
 
         function updateVideoExportSubtitleLocalInfo() {
@@ -5634,7 +5634,12 @@ HTML_TEMPLATE = r"""<!doctype html>
             setText("video_export_th_audio", dict.video_export_audio || "Audio");
             setText("video_export_th_progress", dict.table_progress || "Progress");
             setText("video_export_overall_label", dict.overall_progress || "Overall progress");
-            setText("video_export_ffmpeg_log_btn", dict.video_export_ffmpeg_log || "FFMPEG Log");
+            setText("video_export_ffmpeg_log_btn", dict.video_export_ffmpeg_log_btn || "FFMPEG Log");
+            setText("ffmpeg_log_window_title", dict.ffmpeg_log_window_title || "FFMPEG Log");
+            setText("ffmpeg_copy_log_btn", dict.ffmpeg_log_copy || "Copy");
+            setText("ffmpeg_export_log_btn", dict.ffmpeg_log_export || "Export");
+            setText("ffmpeg_clear_log_btn", dict.ffmpeg_log_clear || "Clear log");
+            setText("ffmpeg_close_log_btn", dict.ffmpeg_log_close || "Close");
             setText("video_export_start_btn", dict.video_export_start || "Start Export");
             setText("video_export_close_btn", dict.close || "Close");
             setPlaceholder("output", dict.placeholder_output);
@@ -5664,6 +5669,7 @@ HTML_TEMPLATE = r"""<!doctype html>
             setTooltip("video_export_output_pick_btn", dict.browse || "Browse");
             setTooltip("video_export_subtitle_pick_btn", dict.video_export_subtitle_pick_tooltip || dict.video_export_subtitle_pick || "Pick");
             setTooltip("video_export_hw_toggle_shell", dict.video_export_hw_toggle_tooltip || dict.video_export_hw_toggle_text || "Use hardware acceleration");
+            setTooltip("video_export_ffmpeg_log_btn", dict.video_export_ffmpeg_log_tooltip || dict.video_export_ffmpeg_log_btn || "FFMPEG Log");
             setTooltip("video_export_start_btn", dict.video_export_start_tooltip || dict.video_export_start || "Start Export");
             setTooltip("video_export_close_btn", dict.video_export_close_tooltip || dict.close || "Close");
             setText("settings_title", dict.settings_title);
