@@ -357,6 +357,32 @@ HTML_TEMPLATE = r"""<!doctype html>
             -webkit-user-select: none;
         }
 
+        .sub-meta {
+            margin-top: 4px;
+            color: var(--muted);
+            font-size: 11px;
+            line-height: 1.35;
+            cursor: default;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        .sub-meta-repo {
+            white-space: normal;
+            word-break: break-all;
+        }
+
+        .sub-meta a {
+            color: var(--acc);
+            text-decoration: none;
+            border-bottom: none;
+        }
+
+        .sub-meta a:hover {
+            color: color-mix(in srgb, var(--acc) 70%, #ffffff 30%);
+            border-bottom: none;
+        }
+
         label {
             user-select: none;
             -webkit-user-select: none;
@@ -1015,9 +1041,25 @@ HTML_TEMPLATE = r"""<!doctype html>
             min-width: 80px;
         }
 
-        /* BLK row: 4-column grid — label | textbox (1fr) | Load btn | View btn (collapses when hidden) */
+        /* BLK row: label | textbox | action group */
         .blk-row {
-            grid-template-columns: max-content 1fr auto auto;
+            grid-template-columns: max-content minmax(0, 1fr) auto;
+        }
+
+        .blk-row #blk_input {
+            min-width: 0;
+        }
+
+        .blk-actions {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            flex-wrap: nowrap;
+            justify-content: flex-start;
+        }
+
+        .blk-actions .btn {
+            flex: 0 0 auto;
         }
 
         .run {
@@ -1162,7 +1204,8 @@ HTML_TEMPLATE = r"""<!doctype html>
         .sync-result-text::-webkit-scrollbar,
         .save-success-path::-webkit-scrollbar,
         .usage-body::-webkit-scrollbar,
-        .settings-content::-webkit-scrollbar {
+        .settings-content::-webkit-scrollbar,
+        .video-export-list::-webkit-scrollbar {
             width: 12px;
             height: 12px;
             cursor: default;
@@ -1174,7 +1217,8 @@ HTML_TEMPLATE = r"""<!doctype html>
         .sync-result-text::-webkit-scrollbar-track,
         .save-success-path::-webkit-scrollbar-track,
         .usage-body::-webkit-scrollbar-track,
-        .settings-content::-webkit-scrollbar-track {
+        .settings-content::-webkit-scrollbar-track,
+        .video-export-list::-webkit-scrollbar-track {
             background: var(--scroll-track);
             border-radius: 999px;
             cursor: default;
@@ -1186,7 +1230,8 @@ HTML_TEMPLATE = r"""<!doctype html>
         .sync-result-text::-webkit-scrollbar-thumb,
         .save-success-path::-webkit-scrollbar-thumb,
         .usage-body::-webkit-scrollbar-thumb,
-        .settings-content::-webkit-scrollbar-thumb {
+        .settings-content::-webkit-scrollbar-thumb,
+        .video-export-list::-webkit-scrollbar-thumb {
             background: var(--scroll-thumb);
             border-radius: 999px;
             border: 2px solid var(--scroll-track);
@@ -1199,7 +1244,8 @@ HTML_TEMPLATE = r"""<!doctype html>
         .sync-result-text::-webkit-scrollbar-button,
         .save-success-path::-webkit-scrollbar-button,
         .usage-body::-webkit-scrollbar-button,
-        .settings-content::-webkit-scrollbar-button {
+        .settings-content::-webkit-scrollbar-button,
+        .video-export-list::-webkit-scrollbar-button {
             width: 0;
             height: 0;
             display: none;
@@ -1211,9 +1257,39 @@ HTML_TEMPLATE = r"""<!doctype html>
         .sync-result-text,
         .save-success-path,
         .usage-body,
-        .settings-content {
+        .settings-content,
+        .video-export-list {
             scrollbar-color: var(--scroll-thumb) var(--scroll-track);
             scrollbar-width: thin;
+        }
+
+        .hover-tooltip {
+            position: fixed;
+            left: 0;
+            top: 0;
+            transform: translate3d(-9999px, -9999px, 0);
+            background: var(--panel0);
+            color: var(--fg);
+            border: 1px solid var(--line);
+            border-radius: 6px;
+            padding: 6px 10px;
+            font-size: 11px;
+            line-height: 1.25;
+            white-space: nowrap;
+            word-break: normal;
+            pointer-events: none;
+            opacity: 0;
+            visibility: hidden;
+            z-index: 160;
+            box-shadow: 0 4px 12px #00000044;
+            transition: opacity 120ms ease;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        .hover-tooltip.show {
+            opacity: 1;
+            visibility: visible;
         }
 
         .mini-track {
@@ -2148,6 +2224,22 @@ HTML_TEMPLATE = r"""<!doctype html>
             margin-top: 6px;
         }
 
+        #versions_patch_modal .modal-head {
+            justify-content: center;
+            flex-direction: column;
+            align-items: center;
+            gap: 2px;
+        }
+
+        #versions_patch_modal .modal-head > span {
+            width: 100%;
+            text-align: center;
+        }
+
+        #versions_patch_summary {
+            margin-top: 8px;
+        }
+
         .blk-preview {
             flex: 1;
             margin: 0;
@@ -2429,6 +2521,8 @@ HTML_TEMPLATE = r"""<!doctype html>
                         <div class="brand-text">
                             <h1 class="title" id="title_text">UsmDiviner GUI</h1>
                             <div class="sub" id="subtitle_text">USM key recovery and extraction with MHY multi-game support</div>
+                            <div class="sub-meta" id="project_author_text">Author: Chinese @独行者 | English @LoneOne-HRB</div>
+                            <div class="sub-meta sub-meta-repo" id="project_repo_text">Project repo: https://github.com/HRB-YuPai/UsmDiviner-GUI</div>
                         </div>
                     </div>
                     <div class="toolbar-controls">
@@ -2484,6 +2578,13 @@ HTML_TEMPLATE = r"""<!doctype html>
                                     <span class="toggle-slider"></span>
                                 </label>
                             </div>
+                            <div class="mode-inline hidden" id="versions_patch_mode_row">
+                                <label id="versions_patch_mode_text" for="versions_patch_toggle">versions.json patch</label>
+                                <label class="toggle-switch" id="versions_patch_toggle_shell" data-tooltip="Patch versions.json from BLK data">
+                                    <input type="checkbox" id="versions_patch_toggle" onchange="syncVersionsPatchToggle()" />
+                                    <span class="toggle-slider"></span>
+                                </label>
+                            </div>
                         </div>
                         <div class="form-cols">
                             <div class="form-col">
@@ -2507,8 +2608,12 @@ HTML_TEMPLATE = r"""<!doctype html>
                                 <div class="row blk-row hidden" id="blk_row">
                                     <label id="blk_label" for="blk_input">Load BLK</label>
                                     <input id="blk_input" type="text" readonly placeholder="" />
-                                    <button class="btn" id="blk_pick_btn" data-tooltip="Select BLK file" onclick="pickBlkInput()">Load</button>
-                                    <button class="btn hidden" id="open_versions_btn" onclick="openBlkVersionsModal()">View</button>
+                                    <div class="blk-actions" id="blk_actions_group">
+                                        <button class="btn" id="blk_pick_btn" data-tooltip="Select BLK file" onclick="pickBlkInput()">Load</button>
+                                        <button class="btn hidden" id="pick_versions_patch_base_btn" onclick="pickVersionsPatchBase()">Base JSON</button>
+                                        <button class="btn hidden" id="open_versions_btn" onclick="openBlkVersionsModal()">View</button>
+                                        <button class="btn hidden" id="open_versions_patch_btn" onclick="openVersionsPatchModal()">Patch</button>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -2761,6 +2866,26 @@ HTML_TEMPLATE = r"""<!doctype html>
         </div>
     </div>
 
+    <div id="versions_patch_modal" class="modal hidden">
+        <div class="modal-card blk-modal-card">
+            <div class="modal-head">
+                <span id="versions_patch_title">versions.json patch</span>
+                <div class="blk-head-line" id="versions_patch_summary">No patch preview available.</div>
+                <div class="blk-head-line" id="versions_patch_source">Source BLK: —</div>
+                <div class="blk-head-line" id="versions_patch_base_line"></div>
+                <div class="blk-head-line" id="versions_patch_warning"></div>
+            </div>
+            <div class="blk-modal-body">
+                <textarea id="versions_patch_box" class="blk-preview" spellcheck="false" readonly></textarea>
+            </div>
+            <div class="modal-actions">
+                <button class="btn" id="versions_patch_copy_btn" onclick="copyVersionsPatch()">Copy</button>
+                <button class="btn" id="versions_patch_save_btn" onclick="saveVersionsPatch()">Save</button>
+                <button class="btn" id="versions_patch_close_btn" onclick="closeVersionsPatchModal()">Close</button>
+            </div>
+        </div>
+    </div>
+
     <div id="video_export_modal" class="modal hidden">
         <div class="modal-card video-export-card">
             <div class="modal-head">
@@ -2905,6 +3030,7 @@ HTML_TEMPLATE = r"""<!doctype html>
     </div>
 
     <div id="copy_toast" class="copy-toast"></div>
+    <div id="hover_tooltip" class="hover-tooltip" aria-hidden="true"></div>
 
     <div id="sync_result_modal" class="modal hidden">
         <div class="modal-card sync-result-card">
@@ -3060,6 +3186,10 @@ HTML_TEMPLATE = r"""<!doctype html>
         let blkSearchIndex = -1;
         let blkParsePending = false;
         let blkParseEnabled = false;
+        let versionsPatchEnabled = false;
+        let versionsPatchBasePath = "";
+        let versionsPatchPreviewText = "";
+        let versionsPatchPreviewMeta = null;
         let blkSaveSuccessPath = "";
         let blkSaveCanReveal = false;
         let videoExportCandidates = [];
@@ -3084,11 +3214,52 @@ HTML_TEMPLATE = r"""<!doctype html>
         let lastLogLine = null;
         let lastLogTs = 0;
         let customSelectInstances = new Map();
+        let hoverTooltipVisible = false;
 
         function byId(id) { return document.getElementById(id); }
 
         function t(lang) {
             return I18N[lang] || I18N["en"];
+        }
+
+        function hideHoverTooltip() {
+            const el = byId("hover_tooltip");
+            if (!el) return;
+            el.classList.remove("show");
+            el.setAttribute("aria-hidden", "true");
+            hoverTooltipVisible = false;
+        }
+
+        function showHoverTooltip(message, clientX, clientY) {
+            const el = byId("hover_tooltip");
+            const text = String(message || "").trim();
+            if (!el || !text) {
+                hideHoverTooltip();
+                return;
+            }
+
+            el.textContent = text;
+            el.classList.add("show");
+            el.setAttribute("aria-hidden", "false");
+            hoverTooltipVisible = true;
+
+            const offsetX = 12;
+            const offsetY = 18;
+            const margin = 8;
+            const rect = el.getBoundingClientRect();
+            let x = Number(clientX || 0) + offsetX;
+            let y = Number(clientY || 0) + offsetY;
+
+            if (x + rect.width + margin > window.innerWidth) {
+                x = window.innerWidth - rect.width - margin;
+            }
+            if (y + rect.height + margin > window.innerHeight) {
+                y = Number(clientY || 0) - rect.height - 10;
+            }
+            if (x < margin) x = margin;
+            if (y < margin) y = margin;
+
+            el.style.transform = `translate3d(${Math.round(x)}px, ${Math.round(y)}px, 0)`;
         }
 
         function currentLang() {
@@ -4214,8 +4385,14 @@ HTML_TEMPLATE = r"""<!doctype html>
                     if (cell.title) td.title = cell.title;
                     if (cell.id) td.id = cell.id;
                     if (cell.id && (cell.id.endsWith("_key1") || cell.id.endsWith("_key2") || cell.id.endsWith("_genshin"))) {
+                        const hint = t(currentLang()).cell_copy_hint || "";
+                        td.classList.add("copyable-cell");
+                        td.setAttribute("data-copy-tooltip", hint);
+                        td.removeAttribute("title");
                         td.ondblclick = () => copyCellText(td);
-                        td.title = t(currentLang()).cell_copy_hint;
+                        td.onmouseenter = (ev) => showHoverTooltip(hint, ev.clientX, ev.clientY);
+                        td.onmousemove = (ev) => showHoverTooltip(hint, ev.clientX, ev.clientY);
+                        td.onmouseleave = () => hideHoverTooltip();
                     }
                     tr.appendChild(td);
                 });
@@ -4957,11 +5134,16 @@ HTML_TEMPLATE = r"""<!doctype html>
 
         function applyLanguage(lang) {
             const dict = t(lang);
+            if (hoverTooltipVisible) {
+                hideHoverTooltip();
+            }
             document.documentElement.lang = lang;
             document.title = dict.app_title;
             setText("window_title_text", dict.app_title);
             setText("title_text", dict.app_title);
             setText("subtitle_text", dict.app_subtitle);
+            setText("project_author_text", dict.project_author_text || "Author: @LoneOne-HRB");
+            setTextWithLinks("project_repo_text", dict.project_repo_text || "Project repo: https://github.com/HRB-YuPai/UsmDiviner-GUI");
             setText("game_label_text", dict.game_label || "Game");
             setText("game_opt_honkai_star_rail", dict.game_opt_honkai_star_rail || "Honkai: Star Rail");
             setText("game_opt_genshin_impact", dict.game_opt_genshin_impact || "Genshin Impact");
@@ -5036,12 +5218,23 @@ HTML_TEMPLATE = r"""<!doctype html>
             setText("run", dict.run);
             setText("blk_label", dict.blk_file_label);
             setText("blk_pick_btn", dict.btn_blk_load);
+            setText("pick_versions_patch_base_btn", dict.btn_pick_versions_patch_base || "Base JSON");
             setText("open_versions_btn", dict.btn_view_versions);
+            setText("open_versions_patch_btn", dict.btn_patch_versions || "Patch");
             setText("blk_versions_title", dict.blk_versions_title);
             setText("blk_versions_copy_btn", dict.blk_versions_copy);
             setText("blk_versions_save_btn", dict.blk_versions_save || dict.save_report);
             setText("blk_versions_sync_btn", dict.blk_versions_sync);
             setText("blk_versions_close_btn", dict.close);
+            setText("versions_patch_mode_text", dict.versions_patch_mode_label || "versions.json patch");
+            setText("versions_patch_title", dict.versions_patch_title || "versions.json patch");
+            setText("versions_patch_summary", dict.versions_patch_modal_empty || "No patch preview available.");
+            setText("versions_patch_source", dict.versions_patch_source_empty || "Source BLK: —");
+            setText("versions_patch_warning", "");
+
+            setText("versions_patch_copy_btn", dict.blk_versions_copy || "Copy");
+            setText("versions_patch_save_btn", dict.versions_patch_save || dict.save_report || "Save");
+            setText("versions_patch_close_btn", dict.close || "Close");
             setText("sync_result_title", dict.blk_sync_popup_title || dict.blk_versions_sync);
             setText("sync_result_close_btn", dict.close);
             setText("sync_result_note", dict.blk_sync_popup_note || "");
@@ -5120,6 +5313,7 @@ HTML_TEMPLATE = r"""<!doctype html>
             setPlaceholder("blk_input", dict.placeholder_blk_input);
             setPlaceholder("video_export_output", dict.video_export_output_placeholder || "");
             setPlaceholder("blk_search_input", dict.blk_search_placeholder);
+
             setTooltip("blk_search_case_btn", dict.blk_search_match_case);
             setTooltip("blk_search_word_btn", dict.blk_search_match_whole);
             setTooltip("blk_search_prev_btn", dict.blk_search_prev_tooltip);
@@ -5129,8 +5323,15 @@ HTML_TEMPLATE = r"""<!doctype html>
             setTooltip("output_pick_btn", dict.btn_output_pick_tooltip);
             setTooltip("report_pick_btn", dict.btn_report_pick_tooltip);
             setTooltip("blk_pick_btn", dict.btn_blk_pick_tooltip);
+            setTooltip("pick_versions_patch_base_btn", dict.btn_pick_versions_patch_base_tooltip || dict.select_versions_patch_base_file || dict.versions_patch_base_label || "Select base versions.json");
             setTooltip("open_versions_btn", dict.btn_view_versions_tooltip);
+            setTooltip("open_versions_patch_btn", dict.btn_patch_versions_tooltip || dict.btn_view_versions_tooltip);
             setTooltip("blk_parse_toggle_shell", dict.blk_parse_toggle_tooltip || "原神 26236578.blk 解析");
+            setTooltip("versions_patch_toggle_shell", dict.versions_patch_mode_tooltip || dict.versions_patch_toggle_tooltip || "Patch versions.json from BLK data");
+
+            setTooltip("versions_patch_copy_btn", dict.btn_versions_patch_copy_tooltip || dict.blk_versions_copy || "Copy");
+            setTooltip("versions_patch_save_btn", dict.btn_versions_patch_save_tooltip || dict.versions_patch_save || dict.save_report_tooltip);
+            setTooltip("versions_patch_close_btn", dict.btn_versions_patch_close_tooltip || dict.close);
             setTooltip("video_export_output_pick_btn", dict.browse || "Browse");
             setTooltip("video_export_subtitle_pick_btn", dict.video_export_subtitle_pick_tooltip || dict.video_export_subtitle_pick || "Pick");
             setTooltip("video_export_start_btn", dict.video_export_start_tooltip || dict.video_export_start || "Start Export");
@@ -5193,8 +5394,10 @@ HTML_TEMPLATE = r"""<!doctype html>
             updateGameAwareUi(false);
             renderBlkStatus();
             renderBlkModal();
+            renderVersionsPatchModal();
             updateBlkSearchStatus();
             syncBlkParseToggle(false);
+            syncVersionsPatchToggle(false);
             renderLogBox();
             updateStatusStrip();
         }
@@ -5456,6 +5659,12 @@ HTML_TEMPLATE = r"""<!doctype html>
             } else if (el) {
                 el.value = value;
             }
+            if (field === "versions_patch_base") {
+                versionsPatchBasePath = String(value || "");
+                versionsPatchPreviewText = "";
+                versionsPatchPreviewMeta = null;
+                renderVersionsPatchModal();
+            }
             if (field === "video_export_subtitles") {
                 try {
                     const parsed = JSON.parse(String(value || "[]"));
@@ -5473,7 +5682,7 @@ HTML_TEMPLATE = r"""<!doctype html>
             if (field === "input") {
                 previewInput();
             } else if (field === "blk_input") {
-                if (!blkParseEnabled) {
+                if (!(blkParseEnabled || versionsPatchEnabled)) {
                     return;
                 }
                 blkParsePending = true;
@@ -5485,18 +5694,31 @@ HTML_TEMPLATE = r"""<!doctype html>
         }
 
         function renderBlkStatus() {
-            const btn = byId("open_versions_btn");
-            if (!btn) return;
+            const parseBtn = byId("open_versions_btn");
+            const patchBtn = byId("open_versions_patch_btn");
+            const patchBaseBtn = byId("pick_versions_patch_base_btn");
+            const row = byId("blk_row");
+            if (row) {
+                row.classList.toggle("hidden", !(blkParseEnabled || versionsPatchEnabled));
+            }
             if (!isGenshinSelected() || !blkParseEnabled) {
-                btn.classList.add("hidden");
+                if (parseBtn) parseBtn.classList.add("hidden");
+            } else if (parseBtn) {
+                const hasVersions = !!(blkVersionsData && !blkVersionsData.error &&
+                    blkVersionsData.versions_json && blkVersionsData.versions_json !== "null");
+                parseBtn.classList.toggle("hidden", !hasVersions);
+            }
+            if (!isGenshinSelected() || !versionsPatchEnabled) {
+                if (patchBaseBtn) patchBaseBtn.classList.add("hidden");
+                if (patchBtn) patchBtn.classList.add("hidden");
                 return;
             }
+            if (patchBaseBtn) patchBaseBtn.classList.remove("hidden");
             const hasVersions = !!(blkVersionsData && !blkVersionsData.error &&
                 blkVersionsData.versions_json && blkVersionsData.versions_json !== "null");
-            if (hasVersions) {
-                btn.classList.remove("hidden");
-            } else {
-                btn.classList.add("hidden");
+            if (patchBtn) patchBtn.classList.remove("hidden");
+            if (versionsPatchEnabled) {
+                renderVersionsPatchModal();
             }
         }
 
@@ -5707,7 +5929,7 @@ HTML_TEMPLATE = r"""<!doctype html>
         }
 
         function setBlkVersions(payloadJson) {
-            if (!blkParseEnabled) {
+            if (!(blkParseEnabled || versionsPatchEnabled)) {
                 return;
             }
             blkParsePending = false;
@@ -5726,10 +5948,11 @@ HTML_TEMPLATE = r"""<!doctype html>
             }
             renderBlkStatus();
             renderBlkModal();
+            renderVersionsPatchModal();
         }
 
         function pickBlkInput() {
-            if (!bridge || !blkParseEnabled) return;
+            if (!bridge || !(blkParseEnabled || versionsPatchEnabled)) return;
             bridge.pickBlkFile();
         }
 
@@ -5742,6 +5965,129 @@ HTML_TEMPLATE = r"""<!doctype html>
 
         function closeBlkVersionsModal() {
             byId("blk_versions_modal").classList.add("hidden");
+        }
+
+        function clearVersionsPatchPreview() {
+            versionsPatchPreviewText = "";
+            versionsPatchPreviewMeta = null;
+            renderVersionsPatchModal();
+        }
+
+        function renderVersionsPatchModal() {
+            const summary = byId("versions_patch_summary");
+            const source = byId("versions_patch_source");
+            const baseLine = byId("versions_patch_base_line");
+            const warning = byId("versions_patch_warning");
+            const box = byId("versions_patch_box");
+            const dict = t(currentLang());
+            const sourcePath = blkVersionsData && blkVersionsData.versions ? blkVersionsData.versions.source : null;
+            if (baseLine) {
+                const baseLabel = dict.versions_patch_base_label || "Base versions.json";
+                baseLine.textContent = baseLabel + ": " + (versionsPatchBasePath || "—");
+            }
+            if (summary) {
+                summary.textContent = versionsPatchPreviewMeta && versionsPatchPreviewMeta.summary
+                    ? versionsPatchPreviewMeta.summary
+                    : (dict.versions_patch_modal_empty || "No patch preview available.");
+            }
+            if (source) {
+                source.textContent = (dict.versions_patch_source_label || "Source BLK") + ": " + String(sourcePath || "—");
+            }
+            if (warning) {
+                warning.textContent = versionsPatchPreviewMeta && versionsPatchPreviewMeta.warning
+                    ? versionsPatchPreviewMeta.warning
+                    : "";
+            }
+            const raw = versionsPatchPreviewText || "";
+            if (box && box.value !== raw) {
+                box.value = raw;
+            }
+        }
+
+        function openVersionsPatchModal() {
+            renderVersionsPatchModal();
+            byId("versions_patch_modal").classList.remove("hidden");
+            if (versionsPatchBasePath && blkVersionsData && blkVersionsData.versions_json && blkVersionsData.versions_json !== "null" && bridge && bridge.requestVersionsPatchPreview) {
+                requestVersionsPatchPreview();
+            }
+        }
+
+        function closeVersionsPatchModal() {
+            byId("versions_patch_modal").classList.add("hidden");
+        }
+
+        function pickVersionsPatchBase() {
+            if (!bridge || !bridge.pickVersionsPatchBaseFile) return;
+            bridge.pickVersionsPatchBaseFile();
+        }
+
+        function requestVersionsPatchPreview() {
+            const dict = t(currentLang());
+            if (!versionsPatchBasePath) {
+                showCopyToast(dict.versions_patch_base_required || dict.blk_versions_modal_empty || "");
+                return;
+            }
+            if (!blkVersionsData || !blkVersionsData.versions_json || blkVersionsData.versions_json === "null") {
+                showCopyToast(dict.blk_versions_sync_no_data || "");
+                return;
+            }
+            if (!bridge || !bridge.requestVersionsPatchPreview) {
+                showCopyToast(dict.blk_versions_sync_no_bridge || "");
+                return;
+            }
+            const rows = Array.from(fileRows.values() || []);
+            bridge.requestVersionsPatchPreview(versionsPatchBasePath, JSON.stringify(rows));
+        }
+
+        function copyVersionsPatch() {
+            const dict = t(currentLang());
+            const text = String(versionsPatchPreviewText || "");
+            if (!text) {
+                showCopyToast(dict.versions_patch_modal_empty || dict.blk_versions_modal_empty || "");
+                return;
+            }
+            copyTextToClipboard(text);
+            showCopyToast(dict.blk_versions_copied || dict.cell_copied || "Copied");
+        }
+
+        function saveVersionsPatch() {
+            const dict = t(currentLang());
+            const text = String(versionsPatchPreviewText || "");
+            if (!text) {
+                showCopyToast(dict.versions_patch_modal_empty || dict.blk_versions_modal_empty || "");
+                return;
+            }
+            if (!bridge || !bridge.saveVersionsPatch) {
+                showCopyToast(dict.blk_versions_sync_no_bridge || "");
+                return;
+            }
+            bridge.saveVersionsPatch();
+        }
+
+        function onVersionsPatchReady(payloadJson) {
+            try {
+                const payload = JSON.parse(payloadJson || "{}");
+                versionsPatchPreviewText = String(payload.patched_json || "");
+                versionsPatchPreviewMeta = {
+                    summary: String(payload.summary || ""),
+                    warning: String(payload.warning || ""),
+                    base_path: String(payload.base_path || versionsPatchBasePath || ""),
+                    source_path: String(payload.source_path || ""),
+                    stats: payload.stats || {},
+                };
+                if (payload.base_path) {
+                    versionsPatchBasePath = String(payload.base_path || "");
+                }
+                renderVersionsPatchModal();
+                if (!byId("versions_patch_modal").classList.contains("hidden")) {
+                    const box = byId("versions_patch_box");
+                    if (box) box.focus();
+                }
+            } catch (_) {
+                versionsPatchPreviewText = "";
+                versionsPatchPreviewMeta = { summary: payloadJson || "", warning: "", stats: {} };
+                renderVersionsPatchModal();
+            }
         }
 
         async function copyBlkVersions() {
@@ -5784,6 +6130,83 @@ HTML_TEMPLATE = r"""<!doctype html>
             bridge.syncBlkKeysFromRows(JSON.stringify(rows));
         }
 
+        function syncBlkParseToggle(clearExisting = true) {
+            const toggle = byId("blk_parse_toggle");
+            const patchToggle = byId("versions_patch_toggle");
+            const row = byId("blk_row");
+            if (!isGenshinSelected()) {
+                if (toggle) toggle.checked = false;
+                if (patchToggle) patchToggle.checked = false;
+                blkParseEnabled = false;
+                versionsPatchEnabled = false;
+                if (row) row.classList.add("hidden");
+                closeBlkVersionsModal();
+                closeVersionsPatchModal();
+                if (clearExisting) {
+                    resetBlkInputField();
+                    clearVersionsPatchPreview();
+                }
+                return;
+            }
+            blkParseEnabled = !!(toggle && toggle.checked);
+            if (blkParseEnabled && patchToggle && patchToggle.checked) {
+                patchToggle.checked = false;
+                versionsPatchEnabled = false;
+                closeVersionsPatchModal();
+                    resetBlkInputField();
+                    clearVersionsPatchPreview();
+            }
+            if (!blkParseEnabled) {
+                closeBlkVersionsModal();
+                if (clearExisting && !versionsPatchEnabled) {
+                    resetBlkInputField();
+                }
+            } else if (clearExisting) {
+                // Keep original behavior: enabling parse mode starts from a clean BLK parse state.
+                clearBlkParseState();
+            }
+            if (row) row.classList.toggle("hidden", !(blkParseEnabled || versionsPatchEnabled));
+            renderBlkStatus();
+            if (clearExisting && !blkParseEnabled && !versionsPatchEnabled) {
+                clearVersionsPatchPreview();
+            }
+        }
+
+        function syncVersionsPatchToggle(clearExisting = true) {
+            const toggle = byId("versions_patch_toggle");
+            const parseToggle = byId("blk_parse_toggle");
+            const row = byId("blk_row");
+            if (!isGenshinSelected()) {
+                if (toggle) toggle.checked = false;
+                if (parseToggle) parseToggle.checked = false;
+                versionsPatchEnabled = false;
+                blkParseEnabled = false;
+                if (row) row.classList.add("hidden");
+                closeVersionsPatchModal();
+                closeBlkVersionsModal();
+                if (clearExisting) {
+                    clearVersionsPatchPreview();
+                    resetBlkInputField();
+                }
+                return;
+            }
+            versionsPatchEnabled = !!(toggle && toggle.checked);
+            if (versionsPatchEnabled && parseToggle && parseToggle.checked) {
+                parseToggle.checked = false;
+                blkParseEnabled = false;
+                closeBlkVersionsModal();
+                    resetBlkInputField();
+            }
+            if (!versionsPatchEnabled) {
+                closeVersionsPatchModal();
+                if (clearExisting && !blkParseEnabled) {
+                    clearVersionsPatchPreview();
+                }
+            }
+            if (row) row.classList.toggle("hidden", !(blkParseEnabled || versionsPatchEnabled));
+            renderBlkStatus();
+        }
+
         function getInputMode() {
             return byId("mode_batch").checked ? "batch" : "single";
         }
@@ -5809,6 +6232,7 @@ HTML_TEMPLATE = r"""<!doctype html>
             blkVersionsEditorText = "";
             renderBlkStatus();
             renderBlkModal();
+            clearVersionsPatchPreview();
         }
 
         function resetBlkInputField() {
@@ -5838,39 +6262,15 @@ HTML_TEMPLATE = r"""<!doctype html>
             return false;
         }
 
-        function syncBlkParseToggle(clearExisting = true) {
-            const toggle = byId("blk_parse_toggle");
-            const row = byId("blk_row");
-            if (!isGenshinSelected()) {
-                if (toggle) toggle.checked = false;
-                blkParseEnabled = false;
-                if (row) row.classList.add("hidden");
-                closeBlkVersionsModal();
-                if (clearExisting) {
-                    resetBlkInputField();
-                }
-                return;
-            }
-            blkParseEnabled = !!(toggle && toggle.checked);
-            if (row) row.classList.toggle("hidden", !blkParseEnabled);
-            if (!blkParseEnabled) {
-                closeBlkVersionsModal();
-                if (clearExisting) {
-                    resetBlkInputField();
-                }
-                return;
-            }
-            if (clearExisting) {
-                clearBlkParseState();
-            }
-        }
-
         function updateGameAwareUi(clearBlkState = true) {
             const modeRow = byId("blk_parse_mode_row");
+            const patchRow = byId("versions_patch_mode_row");
             const allowBlk = isGenshinSelected();
             if (modeRow) modeRow.classList.toggle("hidden", !allowBlk);
+            if (patchRow) patchRow.classList.toggle("hidden", !allowBlk);
             if (!allowBlk) {
                 syncBlkParseToggle(clearBlkState);
+                syncVersionsPatchToggle(clearBlkState);
             }
         }
 
@@ -6085,6 +6485,7 @@ HTML_TEMPLATE = r"""<!doctype html>
             bridge.fileProgressUpdate.connect(updateFileProgress);
             bridge.overallProgressUpdate.connect(updateOverallProgress);
             bridge.blkVersionsReady.connect(setBlkVersions);
+            bridge.versionsPatchReady.connect(onVersionsPatchReady);
             bridge.styleRefreshed.connect(function(css) {
                 const el = document.querySelector("style");
                 if (el) el.textContent = css;
@@ -6415,6 +6816,7 @@ class WebBridge(QObject):
     syncResultReady = Signal(str)
     blkSavePromptReady = Signal(str)
     blkSaveCompleted = Signal(str)
+    versionsPatchReady = Signal(str)
     indexExportResultReady = Signal(str)
     logExportResultReady = Signal(str)
     videoExportReady = Signal(str)
@@ -6446,6 +6848,8 @@ class WebBridge(QObject):
         self._cleanup_worker: threading.Thread | None = None
         self._blk_result_lock = threading.Lock()
         self._last_blk_result: dict | None = None
+        self._patch_result_lock = threading.Lock()
+        self._last_patch_result: dict | None = None
         self._language = DEFAULT_LANGUAGE
         self._language_lock = threading.Lock()
         self._game = DEFAULT_GAME
@@ -6517,10 +6921,6 @@ class WebBridge(QObject):
             self._generated_dirs.add(normalized)
 
     def _register_report_artifacts(self, report: dict[str, Any]) -> None:
-        output_dir_text = str(report.get("output_dir") or "").strip()
-        if output_dir_text:
-            self._register_generated_dir(Path(output_dir_text))
-
         report_path_text = str(report.get("report_path") or "").strip()
         if report_path_text:
             self._register_generated_file(Path(report_path_text))
@@ -6562,89 +6962,8 @@ class WebBridge(QObject):
             file_items = [Path(p) for p in sorted(self._generated_files)]
             dir_items = [Path(p) for p in sorted(self._generated_dirs)]
 
-        # Prefer removing generated output folders as complete trees on exit.
-        existing_dirs = [path for path in dir_items if path.exists() and path.is_dir()]
-        cleanup_roots: list[Path] = []
-        for folder in sorted(existing_dirs, key=lambda p: (len(str(p)), str(p))):
-            skip_nested = False
-            for root_dir in cleanup_roots:
-                try:
-                    folder.relative_to(root_dir)
-                    skip_nested = True
-                    break
-                except ValueError:
-                    continue
-            if not skip_nested:
-                cleanup_roots.append(folder)
-
-        if cleanup_roots:
-            root = Path.cwd()
-            removed = 0
-            failed = 0
-            total = len(cleanup_roots)
-            for idx, folder in enumerate(cleanup_roots, 1):
-                try:
-                    relative_path = str(folder.relative_to(root))
-                except ValueError:
-                    relative_path = str(folder)
-
-                if dialog:
-                    dialog.update_step(
-                        self._t("cleanup_dialog_progress", done=idx, total=total),
-                        f"{self._t('cleanup_file_label')} {folder.name}",
-                        f"{self._t('cleanup_relative_path_label')} {relative_path}",
-                        idx - 1,
-                        total,
-                    )
-                if callable(progress_callback):
-                    progress_callback(
-                        self._t("cleanup_dialog_progress", done=idx, total=total),
-                        f"{self._t('cleanup_file_label')} {folder.name}",
-                        f"{self._t('cleanup_relative_path_label')} {relative_path}",
-                        idx - 1,
-                        total,
-                    )
-
-                try:
-                    shutil.rmtree(folder)
-                    removed += 1
-                except OSError:
-                    failed += 1
-
-                if dialog:
-                    dialog.update_step(
-                        self._t("cleanup_dialog_progress", done=idx, total=total),
-                        f"{self._t('cleanup_file_label')} {folder.name}",
-                        f"{self._t('cleanup_relative_path_label')} {relative_path}",
-                        idx,
-                        total,
-                    )
-                if callable(progress_callback):
-                    progress_callback(
-                        self._t("cleanup_dialog_progress", done=idx, total=total),
-                        f"{self._t('cleanup_file_label')} {folder.name}",
-                        f"{self._t('cleanup_relative_path_label')} {relative_path}",
-                        idx,
-                        total,
-                    )
-
-            if dialog:
-                dialog.update_step(
-                    self._t("cleanup_dialog_done", removed=removed, failed=failed),
-                    self._t("cleanup_file_none"),
-                    "",
-                    total,
-                    total,
-                )
-            if callable(progress_callback):
-                progress_callback(
-                    self._t("cleanup_dialog_done", removed=removed, failed=failed),
-                    self._t("cleanup_file_none"),
-                    "",
-                    total,
-                    total,
-                )
-            return
+        # Never delete entire directories during cleanup. User-selected export
+        # folders can be outside workspace and must not be removed.
 
         def _is_intermediate_artifact(path: Path) -> bool:
             name = path.name.lower()
@@ -6946,6 +7265,476 @@ class WebBridge(QObject):
         self.fieldChosen.emit("blk_input", picked_file)
         self._start_blk_parse(Path(picked_file))
 
+    @Slot()
+    def pickVersionsPatchBaseFile(self) -> None:
+        picked_file, _ = QFileDialog.getOpenFileName(
+            None,
+            self._t("select_versions_patch_base_file"),
+            "",
+            "JSON (*.json);;All files (*.*)",
+        )
+        if not picked_file:
+            return
+        self.fieldChosen.emit("versions_patch_base", picked_file)
+
+    def _load_json_payload_from_file(self, path: Path) -> tuple[Any | None, str | None]:
+        if not path.exists() or not path.is_file():
+            return None, self._t("versions_patch_base_missing")
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            return None, self._t("versions_patch_base_invalid_json", reason=exc)
+        if self._load_versions_list_from_payload(payload) is None:
+            return None, self._t("versions_patch_base_invalid_root")
+        return payload, None
+
+    @staticmethod
+    def _clone_json_payload(payload: Any) -> Any:
+        return json.loads(json.dumps(payload, ensure_ascii=False))
+
+    def _collect_patch_row_records(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            key_val = self._parse_sync_key(row.get("usm_decrypt_key"))
+            if key_val is None:
+                key_val = self._parse_sync_key(row.get("genshin_like_key"))
+            if key_val is None:
+                continue
+            row_name = str(row.get("name") or "").strip()
+            row_path = str(row.get("path") or "").strip()
+            stored_name = ""
+            if row_path:
+                stored_name = Path(row_path).name.lower()
+            if not stored_name and row_name:
+                stored_name = row_name.lower()
+            candidates: set[str] = set()
+            if row_name:
+                candidates.add(self._norm_video_name(row_name))
+            if row_path:
+                candidates.add(self._norm_video_name(Path(row_path).name))
+                candidates.add(self._norm_video_name(Path(row_path).stem))
+            candidates = {candidate for candidate in candidates if candidate}
+            if not candidates:
+                continue
+            records.append(
+                {
+                    "key": key_val,
+                    "stored_name": stored_name,
+                    "candidates": candidates,
+                }
+            )
+        return records
+
+    def _build_versions_patch_preview(self, base_payload: Any, rows: list[dict[str, Any]], base_path: str) -> dict[str, Any] | None:
+        with self._blk_result_lock:
+            result = json.loads(json.dumps(self._last_blk_result or {}, ensure_ascii=False))
+        versions_json = result.get("versions_json")
+        if not versions_json or versions_json == "null":
+            return None
+        try:
+            source_payload = json.loads(versions_json)
+        except json.JSONDecodeError:
+            return None
+
+        source_list = self._load_versions_list_from_payload(source_payload) or []
+        base_list = self._load_versions_list_from_payload(base_payload)
+        if base_list is None:
+            return None
+
+        key_map, key_source, key_mode = self._build_template_key_map()
+        row_records = self._collect_patch_row_records(rows)
+
+        patched_root = self._clone_json_payload(base_payload)
+        patched_list = patched_root.get("list") if isinstance(patched_root, dict) else patched_root
+        if not isinstance(patched_list, list):
+            return None
+
+        def norm_version(value: Any) -> str:
+            return str(value or "").strip()
+
+        def collect_video_names(item: dict[str, Any], group: dict[str, Any] | None = None) -> set[str]:
+            videos = item.get("videos") if group is None else group.get("videos")
+            if not isinstance(videos, list):
+                return set()
+            names: set[str] = set()
+            for video in videos:
+                name = self._norm_video_name(str(video or ""))
+                if name:
+                    names.add(name)
+            return names
+
+        def append_unique_videos(target: list[Any], source: Any) -> int:
+            if not isinstance(source, list):
+                return 0
+            existing = {self._norm_video_name(str(item or "")) for item in target if self._norm_video_name(str(item or ""))}
+            added = 0
+            for video in source:
+                raw = str(video or "").strip()
+                if not raw:
+                    continue
+                norm = self._norm_video_name(raw)
+                if not norm or norm in existing:
+                    continue
+                target.append(raw)
+                existing.add(norm)
+                added += 1
+            return added
+
+        base_index: dict[str, dict[str, Any]] = {}
+        for item in patched_list:
+            if not isinstance(item, dict):
+                continue
+            version = norm_version(item.get("version"))
+            if version and version not in base_index:
+                base_index[version] = item
+
+        added_versions = 0
+        added_groups = 0
+        added_videos = 0
+        appended_row_keys = 0
+        library_keys_filled = 0
+        last_row_keys_filled = 0
+        skipped_outside_last = 0
+        unresolved_outside_last = 0
+        used_increment_names: dict[str, int] = {}
+
+        for source_item in source_list:
+            if not isinstance(source_item, dict):
+                continue
+            version = norm_version(source_item.get("version"))
+            if not version:
+                continue
+
+            target_item = base_index.get(version)
+            if target_item is None:
+                new_item = self._clone_json_payload(source_item)
+                patched_list.append(new_item)
+                base_index[version] = new_item
+                added_versions += 1
+                continue
+
+            source_groups = source_item.get("videoGroups")
+            target_groups = target_item.get("videoGroups")
+            if isinstance(source_groups, list):
+                if not isinstance(target_groups, list):
+                    target_groups = []
+                    target_item["videoGroups"] = target_groups
+                target_group_index: dict[str, dict[str, Any]] = {}
+                for group in target_groups:
+                    if not isinstance(group, dict):
+                        continue
+                    group_version = norm_version(group.get("version"))
+                    if group_version and group_version not in target_group_index:
+                        target_group_index[group_version] = group
+                for source_group in source_groups:
+                    if not isinstance(source_group, dict):
+                        continue
+                    group_version = norm_version(source_group.get("version"))
+                    target_group = target_group_index.get(group_version)
+                    if target_group is None:
+                        new_group = self._clone_json_payload(source_group)
+                        target_groups.append(new_group)
+                        if group_version:
+                            target_group_index[group_version] = new_group
+                        added_groups += 1
+                    else:
+                        target_videos = target_group.setdefault("videos", [])
+                        added_videos += append_unique_videos(target_videos, source_group.get("videos"))
+            else:
+                target_videos = target_item.setdefault("videos", [])
+                added_videos += append_unique_videos(target_videos, source_item.get("videos"))
+
+        patched_last_item = patched_list[-1] if patched_list else None
+        last_item_video_names: set[str] = set()
+        if isinstance(patched_last_item, dict):
+            groups = patched_last_item.get("videoGroups")
+            if isinstance(groups, list):
+                for group in groups:
+                    if isinstance(group, dict):
+                        last_item_video_names.update(collect_video_names(patched_last_item, group))
+            else:
+                last_item_video_names.update(collect_video_names(patched_last_item))
+
+        def find_library_key(videos: set[str]) -> int | None:
+            for video in videos:
+                key_val = key_map.get(video)
+                if key_val is not None:
+                    return key_val
+            return None
+
+        def find_row_key(videos: set[str]) -> tuple[int | None, str | None]:
+            for record in row_records:
+                candidates = record.get("candidates") or set()
+                if not isinstance(candidates, set):
+                    continue
+                if not candidates.intersection(videos):
+                    continue
+                return record.get("key"), record.get("stored_name")
+            return None, None
+
+        for index, item in enumerate(patched_list):
+            if not isinstance(item, dict):
+                continue
+            is_last_item = index == len(patched_list) - 1
+            groups = item.get("videoGroups")
+            if isinstance(groups, list):
+                for group in groups:
+                    if not isinstance(group, dict):
+                        continue
+                    if self._parse_sync_key(group.get("key")) is not None:
+                        continue
+                    videos = collect_video_names(item, group)
+                    if not videos:
+                        continue
+                    key_val = find_library_key(videos)
+                    if key_val is not None:
+                        group["key"] = key_val
+                        library_keys_filled += 1
+                        continue
+                    if is_last_item:
+                        key_val, stored_name = find_row_key(videos)
+                        if key_val is not None:
+                            group["key"] = key_val
+                            last_row_keys_filled += 1
+                            appended_row_keys += 1
+                            if stored_name:
+                                used_increment_names[str(stored_name).lower()] = key_val
+                        continue
+                    row_key_val, _ = find_row_key(videos)
+                    if row_key_val is not None:
+                        skipped_outside_last += 1
+                        continue
+                    unresolved_outside_last += 1
+                continue
+
+            if self._parse_sync_key(item.get("key")) is not None:
+                continue
+            videos = collect_video_names(item)
+            if not videos:
+                continue
+            key_val = find_library_key(videos)
+            if key_val is not None:
+                item["key"] = key_val
+                library_keys_filled += 1
+                continue
+            if is_last_item:
+                key_val, stored_name = find_row_key(videos)
+                if key_val is not None:
+                    item["key"] = key_val
+                    last_row_keys_filled += 1
+                    appended_row_keys += 1
+                    if stored_name:
+                        used_increment_names[str(stored_name).lower()] = key_val
+                continue
+            row_key_val, _ = find_row_key(videos)
+            if row_key_val is not None:
+                skipped_outside_last += 1
+                continue
+            unresolved_outside_last += 1
+
+        normalized_list: list[dict[str, Any]] = []
+        for item in patched_list:
+            if not isinstance(item, dict):
+                continue
+            groups = item.get("videoGroups")
+            if isinstance(groups, list):
+                normalized_groups: list[dict[str, Any]] = []
+                for group in groups:
+                    if isinstance(group, dict):
+                        normalized_groups.append(self._key_first_dict(group))
+                item["videoGroups"] = normalized_groups
+            normalized_list.append(self._key_first_dict(item))
+        patched_root["list"] = normalized_list
+
+        patched_json = json.dumps(patched_root, ensure_ascii=False, indent=2)
+        last_version = ""
+        if isinstance(patched_last_item, dict):
+            last_version = norm_version(patched_last_item.get("version"))
+
+        patch_summary = self._t(
+            "versions_patch_summary",
+            versions=added_versions,
+            groups=added_groups,
+            videos=added_videos,
+            library_keys=library_keys_filled,
+            rows_keys=last_row_keys_filled,
+            skipped_rows=skipped_outside_last,
+            unresolved=unresolved_outside_last,
+            last_version=last_version or "—",
+        )
+        warning_text = ""
+        if unresolved_outside_last > 0:
+            warning_text = self._t("versions_patch_unresolved_warning", count=unresolved_outside_last)
+        elif appended_row_keys > 0 and len(used_increment_names) != appended_row_keys:
+            warning_text = self._t("versions_patch_row_applied_warning", count=appended_row_keys)
+
+        return {
+            "summary": patch_summary,
+            "warning": warning_text,
+            "source_path": str(result.get("input") or ""),
+            "base_path": str(base_path or ""),
+            "patched_json": patched_json,
+            "base_key_source": str(key_source or ""),
+            "base_key_mode": str(key_mode or ""),
+            "used_increment_names": used_increment_names,
+            "stats": {
+                "versions": added_versions,
+                "groups": added_groups,
+                "videos": added_videos,
+                "library_keys": library_keys_filled,
+                "rows_keys": last_row_keys_filled,
+                "unresolved": unresolved_outside_last,
+                "skipped_rows": skipped_outside_last,
+                "last_version": last_version,
+            },
+        }
+
+    def _default_versions_patch_save_path(self, source_path: str) -> str:
+        source = Path(str(source_path or "").strip())
+        stamp = dt.datetime.now().strftime("%Y%m%d")
+        filename = f"versions_patched_gi_{stamp}.json"
+        if source.is_file():
+            return str(source.with_name(filename))
+        if source.exists() and source.is_dir():
+            return str(source / filename)
+        return str(Path.cwd() / filename)
+
+    def _save_versions_patch_to_path(self, content: str, source_path: str) -> str | None:
+        default_path = self._default_versions_patch_save_path(source_path)
+        target_path, _ = QFileDialog.getSaveFileName(
+            None,
+            self._t("select_versions_patch_save_file"),
+            default_path,
+            "JSON (*.json);;All files (*.*)",
+        )
+        if not target_path:
+            return None
+        try:
+            Path(target_path).write_text(str(content or ""), encoding="utf-8")
+        except OSError as exc:
+            self.logMessage.emit(self._t("error_line", file="versions_patched_gi.json", reason=exc))
+            self.uiToast.emit(self._t("versions_patch_save_failed", reason=exc))
+            return None
+        return target_path
+
+    @Slot(str, str)
+    def requestVersionsPatchPreview(self, base_path: str, rows_json: str) -> None:
+        with self._blk_result_lock:
+            has_blk = bool(self._last_blk_result)
+        if not has_blk:
+            self.uiToast.emit(self._t("versions_patch_no_blk_data"))
+            self.logMessage.emit(self._t("versions_patch_no_blk_data"))
+            return
+
+        raw_base_path = str(base_path or "").strip()
+        if not raw_base_path:
+            self.uiToast.emit(self._t("versions_patch_base_required"))
+            self.logMessage.emit(self._t("versions_patch_base_required"))
+            return
+
+        base_payload, error = self._load_json_payload_from_file(Path(raw_base_path))
+        if error:
+            self.uiToast.emit(error)
+            self.logMessage.emit(error)
+            return
+        if base_payload is None:
+            self.uiToast.emit(self._t("versions_patch_no_data"))
+            return
+
+        try:
+            rows = json.loads(rows_json or "[]")
+        except json.JSONDecodeError:
+            rows = []
+
+        preview = self._build_versions_patch_preview(base_payload, rows if isinstance(rows, list) else [], raw_base_path)
+        if not preview:
+            self.uiToast.emit(self._t("versions_patch_build_failed"))
+            self.logMessage.emit(self._t("versions_patch_build_failed"))
+            return
+
+        preview["base_path"] = raw_base_path
+        with self._patch_result_lock:
+            self._last_patch_result = json.loads(json.dumps(preview, ensure_ascii=False))
+
+        self.versionsPatchReady.emit(json.dumps(preview, ensure_ascii=False))
+        self.logMessage.emit(
+            self._t(
+                "versions_patch_preview_ready_log",
+                path=raw_base_path,
+                last_version=str(preview.get("stats", {}).get("last_version") or "—"),
+            )
+        )
+
+    @Slot()
+    def saveVersionsPatch(self) -> None:
+        with self._patch_result_lock:
+            result = json.loads(json.dumps(self._last_patch_result or {}, ensure_ascii=False))
+        if not result:
+            self.uiToast.emit(self._t("versions_patch_no_preview"))
+            return
+
+        patched_json = str(result.get("patched_json") or "")
+        if not patched_json.strip():
+            self.uiToast.emit(self._t("versions_patch_no_preview"))
+            return
+
+        base_path = str(result.get("base_path") or "")
+        saved_path = self._save_versions_patch_to_path(patched_json, base_path)
+        if not saved_path:
+            return
+
+        used_increment_names = result.get("used_increment_names")
+        if isinstance(used_increment_names, dict) and used_increment_names:
+            template_only_keys: dict[str, int] = {}
+            template_payload, template_source = self._load_versions_template_payload()
+            if template_payload is not None:
+                template_only_keys = self._extract_key_map_from_versions_payload(template_payload)
+
+            target = self._resolve_increment_target_path()
+            if target is not None:
+                merged = self._read_usm_key_increment_map(target)
+                added = 0
+                skipped_by_template = 0
+                for name, key_val in used_increment_names.items():
+                    normalized = str(name or "").strip().lower()
+                    parsed_key = self._parse_sync_key(key_val)
+                    if not normalized or parsed_key is None or normalized in merged:
+                        continue
+                    if normalized in template_only_keys:
+                        skipped_by_template += 1
+                        continue
+                    merged[normalized] = parsed_key
+                    added += 1
+                if added > 0:
+                    try:
+                        self._write_usm_key_increment_map(target, merged)
+                        self.logMessage.emit(self._t("versions_patch_increment_updated", count=added, path=str(target)))
+                    except OSError as exc:
+                        self.logMessage.emit(self._t("versions_patch_increment_update_failed", reason=exc))
+                if skipped_by_template > 0:
+                    self.logMessage.emit(
+                        self._t(
+                            "versions_patch_template_existing_skipped",
+                            count=skipped_by_template,
+                            path=str(template_source or "-"),
+                        )
+                    )
+
+        self.blkSaveCompleted.emit(
+            json.dumps(
+                {
+                    "title": self._t("versions_patch_saved_title"),
+                    "message": self._t("versions_patch_saved_message", path=saved_path),
+                    "path": saved_path,
+                    "can_reveal": self._can_reveal_saved_path(),
+                },
+                ensure_ascii=False,
+            )
+        )
+        self.logMessage.emit(self._t("versions_patch_saved_log", path=saved_path))
+
     def _start_blk_parse(self, input_path: Path) -> None:
         if self._blk_worker and self._blk_worker.is_alive():
             self.logMessage.emit(self._t("blk_parse_running"))
@@ -7087,23 +7876,20 @@ class WebBridge(QObject):
             versions_list = None
         return versions_list if isinstance(versions_list, list) else None
 
-    def _game_usm_data_dir(self, create: bool = False) -> Path:
-        path = get_user_data_path() / "usm_data" / self._get_game()
-        if create:
-            path.mkdir(parents=True, exist_ok=True)
-        return path
+    def _game_usm_data_dir(self) -> Path:
+        return get_resource_path(f"assets/usm_data/{self._get_game()}")
 
     def _game_sync_template_path(self) -> Path:
-        return self._game_usm_data_dir(create=True) / "usm_key_base.json"
+        return self._game_usm_data_dir() / "usm_key_base.json"
 
     def _game_increment_path(self) -> Path:
-        return self._game_usm_data_dir(create=True) / "usm_key_increment.json"
+        return self._game_usm_data_dir() / "usm_key_increment.json"
 
     def _sync_template_candidates(self) -> tuple[Path, ...]:
         game = self._get_game()
         candidates: list[Path] = [
-            self._game_sync_template_path(),
             get_resource_path(f"assets/usm_data/{game}/usm_key_base.json"),
+            self._game_sync_template_path(),
         ]
         if game == GENSHIN_GAME_ID:
             candidates.extend(LEGACY_SYNC_TEMPLATE_CANDIDATES)
@@ -7112,8 +7898,8 @@ class WebBridge(QObject):
     def _increment_candidates(self) -> tuple[Path, ...]:
         game = self._get_game()
         candidates: list[Path] = [
-            self._game_increment_path(),
             get_resource_path(f"assets/usm_data/{game}/usm_key_increment.json"),
+            self._game_increment_path(),
         ]
         if game == GENSHIN_GAME_ID:
             candidates.extend(LEGACY_USM_KEY_INCREMENT_CANDIDATES)
@@ -7134,22 +7920,18 @@ class WebBridge(QObject):
                 continue
 
     def _ensure_game_key_scaffold(self) -> None:
-        game_dir = self._game_usm_data_dir(create=True)
-        if self._get_game() != GENSHIN_GAME_ID:
+        # Validate selected game's asset folder on game switch, without creating
+        # user-data folders or copying files.
+        game_dir = self._game_usm_data_dir()
+        if not game_dir.exists() or not game_dir.is_dir():
+            logger.warning("[USM DATA] missing asset dir: %s", game_dir)
             return
-
-        # Migrate legacy single-game files into per-game folder on first use.
-        self._copy_file_if_missing(
-            game_dir / "usm_key_base.json",
-            LEGACY_SYNC_TEMPLATE_CANDIDATES,
-        )
-        self._copy_file_if_missing(
-            game_dir / "usm_key_increment.json",
-            LEGACY_USM_KEY_INCREMENT_CANDIDATES,
-        )
+        for name in ("usm_key_base.json", "usm_key_increment.json"):
+            path = game_dir / name
+            if not path.exists():
+                logger.warning("[USM DATA] missing asset file: %s", path)
 
     def _load_versions_template_payload(self) -> tuple[Any | None, str | None]:
-        self._ensure_game_key_scaffold()
         for template_path in self._sync_template_candidates():
             if not template_path.exists() or not template_path.is_file():
                 continue
@@ -7197,7 +7979,6 @@ class WebBridge(QObject):
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def _load_incremental_key_map(self) -> tuple[dict[str, int], str | None]:
-        self._ensure_game_key_scaffold()
         for candidate in self._increment_candidates():
             parsed = self._read_usm_key_increment_map(candidate)
             if parsed:
@@ -7205,7 +7986,6 @@ class WebBridge(QObject):
         return {}, None
 
     def _resolve_increment_target_path(self) -> Path | None:
-        self._ensure_game_key_scaffold()
         for candidate in self._increment_candidates():
             try:
                 candidate.parent.mkdir(parents=True, exist_ok=True)
@@ -7222,18 +8002,11 @@ class WebBridge(QObject):
         file_text = str(report.get("file") or "").strip()
         if file_text:
             file_path = Path(file_text)
-            names.add(self._norm_video_name(file_path.name))
-            names.add(self._norm_video_name(file_path.stem))
+            if file_path.suffix.lower() == ".usm":
+                # Persist keys for original USM file names only.
+                names.add(file_path.name.lower())
 
-        video = report.get("video") or {}
-        if isinstance(video, dict):
-            video_text = str(video.get("path") or "").strip()
-            if video_text:
-                video_path = Path(video_text)
-                names.add(self._norm_video_name(video_path.name))
-                names.add(self._norm_video_name(video_path.stem))
-
-        return {n for n in names if n}
+        return names
 
     def _auto_append_usm_key_increment(self, report: dict[str, Any]) -> None:
         key_val = self._parse_sync_key(report.get("usm_decrypt_key"))
@@ -7322,6 +8095,32 @@ class WebBridge(QObject):
             "keyed_game_versions": keyed_game_versions,
             "latest_game_version": ordered_versions[-1] if ordered_versions else "",
         }
+
+    def _extract_key_map_from_versions_payload(self, payload: Any) -> dict[str, int]:
+        def add_videos(mapping: dict[str, int], videos: Any, key_val: int | None) -> None:
+            if key_val is None or not isinstance(videos, list):
+                return
+            for video_name in videos:
+                normalized = self._norm_video_name(str(video_name or ""))
+                if normalized:
+                    mapping[normalized] = key_val
+
+        versions_list = self._load_versions_list_from_payload(payload)
+        if not isinstance(versions_list, list):
+            return {}
+
+        mapping: dict[str, int] = {}
+        for item in versions_list:
+            if not isinstance(item, dict):
+                continue
+            add_videos(mapping, item.get("videos"), self._parse_sync_key(item.get("key")))
+            groups = item.get("videoGroups")
+            if isinstance(groups, list):
+                for group in groups:
+                    if not isinstance(group, dict):
+                        continue
+                    add_videos(mapping, group.get("videos"), self._parse_sync_key(group.get("key")))
+        return mapping
 
     @staticmethod
     def _default_versions_save_path(source_path: str) -> str:
@@ -7573,14 +8372,6 @@ class WebBridge(QObject):
         Returns: (key_map, source_path, sync_mode)
         sync_mode: 'normal', 'increment-only', 'blk-fallback'
         """
-        def add_videos(mapping: dict[str, int], videos: Any, key_val: int | None) -> None:
-            if key_val is None or not isinstance(videos, list):
-                return
-            for video_name in videos:
-                normalized = self._norm_video_name(str(video_name or ""))
-                if normalized:
-                    mapping[normalized] = key_val
-
         incremental_map, incremental_path = self._load_incremental_key_map()
         merged_map: dict[str, int] = dict(incremental_map)
         source_path: str | None = incremental_path
@@ -7596,27 +8387,7 @@ class WebBridge(QObject):
             except Exception:
                 continue
 
-            if isinstance(decoded, dict):
-                versions_list = decoded.get("list")
-            elif isinstance(decoded, list):
-                versions_list = decoded
-            else:
-                versions_list = None
-
-            if not isinstance(versions_list, list):
-                continue
-
-            mapping: dict[str, int] = {}
-            for item in versions_list:
-                if not isinstance(item, dict):
-                    continue
-                add_videos(mapping, item.get("videos"), self._parse_sync_key(item.get("key")))
-                groups = item.get("videoGroups")
-                if isinstance(groups, list):
-                    for group in groups:
-                        if not isinstance(group, dict):
-                            continue
-                        add_videos(mapping, group.get("videos"), self._parse_sync_key(group.get("key")))
+            mapping = self._extract_key_map_from_versions_payload(decoded)
 
             if mapping:
                 found_template = True
@@ -8605,7 +9376,6 @@ class WebBridge(QObject):
         ffmpeg: str,
     ) -> None:
         output_dir.mkdir(parents=True, exist_ok=True)
-        self._register_generated_dir(output_dir)
         total = max(1, len(candidates))
         done = 0
         success = 0
@@ -8714,7 +9484,6 @@ class WebBridge(QObject):
                     def _mark_output(path: Path, success_flag: bool) -> None:
                         if success_flag and path.exists() and path.is_file():
                             self._register_generated_file(path)
-                            self._register_generated_dir(path.parent)
 
                     def _export_one(path: Path, subs: list[tuple[Path, str]], mode: str) -> tuple[bool, str]:
                         self.logMessage.emit(
@@ -8968,7 +9737,6 @@ class WebBridge(QObject):
 
     def _collect_config(self, payload: dict) -> dict:
         self._set_game(str(payload.get("game") or self._get_game()))
-        self._ensure_game_key_scaffold()
 
         input_mode = str(payload.get("input_mode") or "single").strip().lower()
         input_text = str(payload.get("input") or "").strip()
@@ -9042,6 +9810,24 @@ class WebBridge(QObject):
             except ValueError as exc:
                 raise ValueError(self._t("manual_key_invalid", reason=exc)) from exc
 
+        # Resolve existing increment key before deciding crack path.
+        if manual_key is None and input_files:
+            increment_map, _ = self._load_incremental_key_map()
+            if increment_map:
+                for usm_path in input_files:
+                    stem = self._norm_video_name(usm_path.stem)
+                    if stem in increment_map:
+                        key_val = increment_map[stem]
+                        manual_key = key_val
+                        self.logMessage.emit(
+                            self._t("process_key_from_increment", file=usm_path.name, usm_key=f"{key_val:016X}")
+                        )
+                        break
+            if manual_key is None:
+                self.logMessage.emit(
+                    self._t("process_key_from_increment_miss", count=len(input_files))
+                )
+
         if manual_key is not None and fast:
             raise ValueError(self._t("key_cannot_fast"))
         if extract_only and manual_key is not None:
@@ -9103,9 +9889,10 @@ class WebBridge(QObject):
                 (70, "process_stage_finalize"),
                 (100, "process_stage_done"),
             ]
+        key_stage = "process_stage_key_apply" if opt.manual_key is not None else "process_stage_key_recovery"
         plan: list[tuple[int, str]] = [
             (4, "process_stage_prepare"),
-            (18, "process_stage_key_recovery"),
+            (18, key_stage),
             (38, "process_stage_demux"),
             (62, "process_stage_decode"),
         ]
@@ -9181,7 +9968,6 @@ class WebBridge(QObject):
             )
 
             Path(opt.output_dir).mkdir(parents=True, exist_ok=True)
-            self._register_generated_dir(Path(opt.output_dir))
             max_workers = max(os.cpu_count() or 1, 1)
             use_parallel = (not no_parallel) and max_workers > 1 and len(files) > 1
 
