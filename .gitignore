@@ -27,3 +27,12 @@ assets/tools/**
 !assets/tools/ffmpeg/**/*.so
 !assets/tools/ffmpeg/**/*.so.*
 !assets/tools/ffmpeg/**/*.dylib
+
+# Allow bundled vgmstream runtime files to be versioned.
+!assets/tools/vgmstream/**/vgmstream-cli
+!assets/tools/vgmstream/**/vgmstream-cli.exe
+!assets/tools/vgmstream/**/vgmstream123
+!assets/tools/vgmstream/**/*.dll
+!assets/tools/vgmstream/**/*.so
+!assets/tools/vgmstream/**/*.so.*
+!assets/tools/vgmstream/**/*.dylib
