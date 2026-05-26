@@ -5838,14 +5838,16 @@ HTML_TEMPLATE = r"""<!doctype html>
 
         /* ============ FFMPEG 日志管理函数 ============ */
         function appendFfmpegLog(line) {
-            if (!ffmpegLoggingActive || (line || "").trim().length === 0) {
+            if ((line || "").trim().length === 0) {
                 return;
             }
             lastFfmpegLogLine = line;
             lastFfmpegLogTs = Date.now();
             ffmpegLogLines.push(line);
+            // Render live only when modal is open
             if (!byId("ffmpeg_log_modal").classList.contains("hidden")) {
                 renderFfmpegLogBox();
+                updateFfmpegLogUiState();
             }
         }
 
@@ -5943,19 +5945,17 @@ HTML_TEMPLATE = r"""<!doctype html>
         }
 
         function openFfmpegLogModal() {
-            ffmpegLoggingActive = true;
             renderFfmpegLogBox();
+            updateFfmpegLogUiState();
             byId("ffmpeg_log_modal").classList.remove("hidden");
         }
 
         function closeFfmpegLogModal() {
-            ffmpegLoggingActive = false;
             byId("ffmpeg_log_modal").classList.add("hidden");
         }
 
         function resetFfmpegLog() {
             ffmpegLogLines = [];
-            ffmpegLoggingActive = false;
             lastFfmpegLogLine = null;
             lastFfmpegLogTs = 0;
             updateFfmpegLogUiState();
