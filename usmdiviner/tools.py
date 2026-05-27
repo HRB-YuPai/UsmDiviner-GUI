@@ -734,7 +734,8 @@ def _run_ffmpeg_command(
         logger.debug("[FFMPEG] output tail:\n%s", proc.stdout[-4000:])
     if not ok:
         _safe_unlink(output_path)
-    return ok, proc.stdout[-4000:]
+    # Always return stdout so caller can display it in the log viewer
+    return ok, (proc.stdout or "")
 
 
 def mux_to_mkv(
@@ -760,7 +761,7 @@ def mux_to_mkv(
     output_mkv.parent.mkdir(parents=True, exist_ok=True)
     _safe_unlink(output_mkv)
 
-    cmd = [ffmpeg, "-y", "-hide_banner", "-loglevel", "error"]
+    cmd = [ffmpeg, "-y", "-hide_banner", "-loglevel", "warning"]
     cmd.extend(_video_input_ffmpeg_args(video_path))
     cmd.extend(["-i", str(video_path)])
     for ap in existing_audio:
@@ -826,7 +827,7 @@ def mux_to_mkv_soft(
     output_mkv.parent.mkdir(parents=True, exist_ok=True)
     _safe_unlink(output_mkv)
 
-    cmd = [ffmpeg, "-y", "-hide_banner", "-loglevel", "error"]
+    cmd = [ffmpeg, "-y", "-hide_banner", "-loglevel", "warning"]
     cmd.extend(_video_input_ffmpeg_args(video_path))
     cmd.extend(["-i", str(video_path)])
     for ap in existing_audio:
@@ -897,7 +898,7 @@ def transcode_mkv_to_mp4(
             "-y",
             "-hide_banner",
             "-loglevel",
-            "error",
+            "warning",
             "-i",
             str(input_mkv),
         ]
@@ -946,7 +947,7 @@ def transcode_ivf_to_mp4(
     output_mp4.parent.mkdir(parents=True, exist_ok=True)
     _safe_unlink(output_mp4)
 
-    cmd = [ffmpeg, "-y", "-hide_banner", "-loglevel", "error"]
+    cmd = [ffmpeg, "-y", "-hide_banner", "-loglevel", "warning"]
     cmd.extend(_video_input_ffmpeg_args(video_path))
     cmd.extend(["-i", str(video_path)])
     for ap in existing_audio:
@@ -1010,7 +1011,7 @@ def transcode_ivf_to_mp4_soft(
     output_mp4.parent.mkdir(parents=True, exist_ok=True)
     _safe_unlink(output_mp4)
 
-    cmd = [ffmpeg, "-y", "-hide_banner", "-loglevel", "error"]
+    cmd = [ffmpeg, "-y", "-hide_banner", "-loglevel", "warning"]
     cmd.extend(_video_input_ffmpeg_args(video_path))
     cmd.extend(["-i", str(video_path)])
     for ap in existing_audio:

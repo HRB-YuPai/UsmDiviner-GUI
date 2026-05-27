@@ -10132,6 +10132,10 @@ class WebBridge(QObject):
                             f"[{name}] mode={mode} fmt={fmt} subtitles={len(subs)} audio_tracks={len(audio_inputs)} "
                             f"subtitle_convert={subtitle_convert_mode} encoder={(preferred_encoder or 'libx264')} out={path}"
                         )
+                        # Emit a header line to FFMPEG log window so it's always visible
+                        self._emit_ffmpeg_log(
+                            f">>> [{name}] ffmpeg start | mode={mode} encoder={preferred_encoder or 'libx264'} out={path.name}"
+                        )
 
                         def _run_with_encoder(encoder: str | None) -> tuple[bool, str]:
                             if fmt == "mkv":
@@ -10192,10 +10196,14 @@ class WebBridge(QObject):
                             self.logMessage.emit(
                                 f"[INFO] [FFMPEG] [{name}] actual encoder used: {actual_encoder} ({actual_mode})"
                             )
+                            self._emit_ffmpeg_log(f">>> [{name}] ffmpeg done OK | encoder={actual_encoder} ({actual_mode})")
                         else:
                             self.logMessage.emit(
                                 f"[WARN] [FFMPEG] [{name}] export failed after encoder attempt: {actual_encoder} ({actual_mode})"
                             )
+                            self._emit_ffmpeg_log(f">>> [{name}] ffmpeg FAILED | encoder={actual_encoder} ({actual_mode})")
+                        if detail:
+                            self._emit_ffmpeg_log(detail)
                         row_encoder_names.add(actual_encoder)
                         row_encoder_kinds.add(actual_mode)
                         return done_ok, detail
@@ -10218,13 +10226,9 @@ class WebBridge(QObject):
                             done + 0.68,
                         )
                         ok, detail = _export_one(out, subtitle_inputs, "container")
-                        if detail:
-                            self._emit_ffmpeg_log(detail)
                         if (not ok) and subtitle_inputs:
                             self.logMessage.emit(f"[WARN] [{name}] container export with subtitles failed, retrying without subtitles: {detail}")
                             ok, detail = _export_one(out, [], "container")
-                            if detail:
-                                self._emit_ffmpeg_log(detail)
                         _mark_output(out, ok)
                         if not ok and detail:
                             self.logMessage.emit(f"[ERROR] [{name}] export failed: {detail}")
@@ -10242,8 +10246,6 @@ class WebBridge(QObject):
                                 out = output_dir / f"{stem}{suffix}{ext}"
                                 self.logMessage.emit(f"[INFO] [{name}] burn export start ({lang or 'SUB'}) -> {out}")
                                 one_ok, detail = _export_one(out, [(sub_path, lang)], "burn")
-                                if detail:
-                                    self._emit_ffmpeg_log(detail)
                                 _mark_output(out, one_ok)
                                 if not one_ok and detail:
                                     self.logMessage.emit(f"[ERROR] [{name}] burn export failed ({lang or 'SUB'}): {detail}")
@@ -10252,8 +10254,6 @@ class WebBridge(QObject):
                             out = output_dir / f"{stem}{ext}"
                             self.logMessage.emit(f"[INFO] [{name}] export start (no subtitles) -> {out}")
                             ok, detail = _export_one(out, [], "container")
-                            if detail:
-                                self._emit_ffmpeg_log(detail)
                             _mark_output(out, ok)
                             if not ok and detail:
                                 self.logMessage.emit(f"[ERROR] [{name}] export failed: {detail}")
@@ -10267,13 +10267,9 @@ class WebBridge(QObject):
                             done + 0.68,
                         )
                         ok_container, detail = _export_one(base_out, subtitle_inputs, "container")
-                        if detail:
-                            self._emit_ffmpeg_log(detail)
                         if (not ok_container) and subtitle_inputs:
                             self.logMessage.emit(f"[WARN] [{name}] hybrid container leg with subtitles failed, retrying without subtitles: {detail}")
                             ok_container, detail = _export_one(base_out, [], "container")
-                            if detail:
-                                self._emit_ffmpeg_log(detail)
                         _mark_output(base_out, ok_container)
                         if not ok_container and detail:
                             self.logMessage.emit(f"[ERROR] [{name}] hybrid container leg failed: {detail}")
@@ -10285,8 +10281,6 @@ class WebBridge(QObject):
                                 out = output_dir / f"{stem}{suffix}{ext}"
                                 self.logMessage.emit(f"[INFO] [{name}] hybrid burn start ({lang or 'SUB'}) -> {out}")
                                 one_ok, detail = _export_one(out, [(sub_path, lang)], "burn")
-                                if detail:
-                                    self._emit_ffmpeg_log(detail)
                                 _mark_output(out, one_ok)
                                 if not one_ok and detail:
                                     self.logMessage.emit(f"[ERROR] [{name}] hybrid burn leg failed ({lang or 'SUB'}): {detail}")
