@@ -10149,6 +10149,7 @@ class WebBridge(QObject):
                                         default_sub_lang=default_subtitle_lang,
                                         convert_subtitles_to_ass=subtitle_convert_mode == "ass",
                                         video_encoder=encoder,
+                                        line_callback=self._emit_ffmpeg_log,
                                     )
                                 return mux_to_mkv(
                                     ffmpeg,
@@ -10158,6 +10159,7 @@ class WebBridge(QObject):
                                     path,
                                     convert_subtitles_to_ass=subtitle_convert_mode == "ass",
                                     video_encoder=encoder,
+                                    line_callback=self._emit_ffmpeg_log,
                                 )
                             if mode == "container":
                                 return transcode_ivf_to_mp4_soft(
@@ -10169,6 +10171,7 @@ class WebBridge(QObject):
                                     default_sub_lang=default_subtitle_lang,
                                     convert_subtitles_to_ass=subtitle_convert_mode == "ass",
                                     video_encoder=encoder,
+                                    line_callback=self._emit_ffmpeg_log,
                                 )
                             return transcode_ivf_to_mp4(
                                 ffmpeg,
@@ -10178,6 +10181,7 @@ class WebBridge(QObject):
                                 path,
                                 convert_subtitles_to_ass=subtitle_convert_mode == "ass",
                                 video_encoder=encoder,
+                                line_callback=self._emit_ffmpeg_log,
                             )
 
                         done_ok, detail = _run_with_encoder(preferred_encoder)

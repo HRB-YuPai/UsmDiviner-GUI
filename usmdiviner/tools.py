@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from collections.abc import Callable
 from functools import lru_cache
 from pathlib import Path
 
@@ -684,6 +685,7 @@ def _run_ffmpeg_command(
     output_path: Path,
     timeout: int,
     error_prefix: str,
+    line_callback: Callable[[str], None] | None = None,
 ) -> tuple[bool, str]:
     ffmpeg_cwd = None
     env = os.environ.copy()
@@ -714,28 +716,71 @@ def _run_ffmpeg_command(
     logger.debug("[FFMPEG] cwd=%s", ffmpeg_cwd or "(inherit)")
     logger.debug("[FFMPEG] command=%s", " ".join(str(part) for part in cmd))
 
-    try:
-        proc = subprocess.run(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            timeout=timeout,
-            cwd=ffmpeg_cwd,
-            env=env,
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        _safe_unlink(output_path)
-        raise ExternalToolError(f"{error_prefix}: {exc}") from exc
+    all_lines: list[str] = []
 
-    ok = proc.returncode == 0 and output_path.exists() and output_path.stat().st_size > 0
-    logger.info("[FFMPEG] end returncode=%s ok=%s output=%s", proc.returncode, ok, output_path)
-    if proc.stdout:
-        logger.debug("[FFMPEG] output tail:\n%s", proc.stdout[-4000:])
+    if line_callback is not None:
+        # Streaming mode: read lines in real-time via Popen so the caller sees
+        # output as it is produced (same as watching ffmpeg in a terminal).
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                cwd=ffmpeg_cwd,
+                env=env,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            _safe_unlink(output_path)
+            raise ExternalToolError(f"{error_prefix}: {exc}") from exc
+
+        try:
+            # text=True enables universal newlines: \r, \n, \r\n all become \n
+            # so each ffmpeg progress-update line (terminated by \r) is a separate
+            # readline() result.
+            assert proc.stdout is not None
+            for raw_line in proc.stdout:
+                line = raw_line.rstrip("\r\n")
+                all_lines.append(line)
+                try:
+                    line_callback(line)
+                except Exception:
+                    pass
+        finally:
+            try:
+                proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+                _safe_unlink(output_path)
+                raise ExternalToolError(f"{error_prefix}: timeout after {timeout}s") from None
+        returncode = proc.returncode
+    else:
+        # Batch mode: collect all output after process exits.
+        try:
+            proc_result = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                timeout=timeout,
+                cwd=ffmpeg_cwd,
+                env=env,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            _safe_unlink(output_path)
+            raise ExternalToolError(f"{error_prefix}: {exc}") from exc
+        returncode = proc_result.returncode
+        all_lines = (proc_result.stdout or "").splitlines()
+
+    stdout = "\n".join(all_lines)
+    ok = returncode == 0 and output_path.exists() and output_path.stat().st_size > 0
+    logger.info("[FFMPEG] end returncode=%s ok=%s output=%s", returncode, ok, output_path)
+    if stdout:
+        logger.debug("[FFMPEG] output tail:\n%s", stdout[-4000:])
     if not ok:
         _safe_unlink(output_path)
-    # Always return stdout so caller can display it in the log viewer
-    return ok, (proc.stdout or "")
+    return ok, stdout
 
 
 def mux_to_mkv(
@@ -747,6 +792,7 @@ def mux_to_mkv(
     convert_subtitles_to_ass: bool = True,
     timeout: int = 300,
     video_encoder: str | None = None,
+    line_callback: Callable[[str], None] | None = None,
 ) -> tuple[bool, str]:
     if not video_path.exists() or video_path.stat().st_size == 0:
         return False, "video stream does not exist"
@@ -761,7 +807,7 @@ def mux_to_mkv(
     output_mkv.parent.mkdir(parents=True, exist_ok=True)
     _safe_unlink(output_mkv)
 
-    cmd = [ffmpeg, "-y", "-hide_banner", "-loglevel", "warning"]
+    cmd = [ffmpeg, "-y", "-hide_banner"]
     cmd.extend(_video_input_ffmpeg_args(video_path))
     cmd.extend(["-i", str(video_path)])
     for ap in existing_audio:
@@ -786,21 +832,21 @@ def mux_to_mkv(
                 if existing_audio:
                     cmd.extend(["-c:a", "mp3", "-b:a", "1411k"])
                 cmd.append(str(output_mkv))
-                return _run_ffmpeg_command(ffmpeg, cmd, output_mkv, timeout, "ffmpeg failed")
+                return _run_ffmpeg_command(ffmpeg, cmd, output_mkv, timeout, "ffmpeg failed", line_callback)
 
         cmd.extend(["-vf", _subtitle_burn_filter(subtitle_path, font_file)])
         cmd.extend(_video_encoder_ffmpeg_args(video_encoder))
         if existing_audio:
             cmd.extend(["-c:a", "mp3", "-b:a", "1411k"])
         cmd.append(str(output_mkv))
-        return _run_ffmpeg_command(ffmpeg, cmd, output_mkv, timeout, "ffmpeg failed")
+        return _run_ffmpeg_command(ffmpeg, cmd, output_mkv, timeout, "ffmpeg failed", line_callback)
 
     cmd.extend(_video_encoder_ffmpeg_args(video_encoder))
     if existing_audio:
         cmd.extend(["-c:a", "mp3", "-b:a", "1411k"])
     cmd.append(str(output_mkv))
 
-    return _run_ffmpeg_command(ffmpeg, cmd, output_mkv, timeout, "ffmpeg failed")
+    return _run_ffmpeg_command(ffmpeg, cmd, output_mkv, timeout, "ffmpeg failed", line_callback)
 
 
 def mux_to_mkv_soft(
@@ -813,6 +859,7 @@ def mux_to_mkv_soft(
     convert_subtitles_to_ass: bool = True,
     timeout: int = 300,
     video_encoder: str | None = None,
+    line_callback: Callable[[str], None] | None = None,
 ) -> tuple[bool, str]:
     if not video_path.exists() or video_path.stat().st_size == 0:
         return False, "video stream does not exist"
@@ -827,7 +874,7 @@ def mux_to_mkv_soft(
     output_mkv.parent.mkdir(parents=True, exist_ok=True)
     _safe_unlink(output_mkv)
 
-    cmd = [ffmpeg, "-y", "-hide_banner", "-loglevel", "warning"]
+    cmd = [ffmpeg, "-y", "-hide_banner"]
     cmd.extend(_video_input_ffmpeg_args(video_path))
     cmd.extend(["-i", str(video_path)])
     for ap in existing_audio:
@@ -875,7 +922,7 @@ def mux_to_mkv_soft(
                 cmd.extend(["-attach", str(font_file), "-metadata:s:t:0", "mimetype=application/x-truetype-font"])
 
         cmd.append(str(output_mkv))
-        return _run_ffmpeg_command(ffmpeg, cmd, output_mkv, timeout, "ffmpeg failed")
+        return _run_ffmpeg_command(ffmpeg, cmd, output_mkv, timeout, "ffmpeg failed", line_callback)
 
 
 def transcode_mkv_to_mp4(
@@ -897,8 +944,6 @@ def transcode_mkv_to_mp4(
             ffmpeg,
             "-y",
             "-hide_banner",
-            "-loglevel",
-            "warning",
             "-i",
             str(input_mkv),
         ]
@@ -933,6 +978,7 @@ def transcode_ivf_to_mp4(
     convert_subtitles_to_ass: bool = True,
     timeout: int = 600,
     video_encoder: str | None = None,
+    line_callback: Callable[[str], None] | None = None,
 ) -> tuple[bool, str]:
     if not video_path.exists() or video_path.stat().st_size == 0:
         return False, "video stream does not exist"
@@ -947,7 +993,7 @@ def transcode_ivf_to_mp4(
     output_mp4.parent.mkdir(parents=True, exist_ok=True)
     _safe_unlink(output_mp4)
 
-    cmd = [ffmpeg, "-y", "-hide_banner", "-loglevel", "warning"]
+    cmd = [ffmpeg, "-y", "-hide_banner"]
     cmd.extend(_video_input_ffmpeg_args(video_path))
     cmd.extend(["-i", str(video_path)])
     for ap in existing_audio:
@@ -971,20 +1017,20 @@ def transcode_ivf_to_mp4(
                 if existing_audio:
                     cmd.extend(["-c:a", "mp3", "-b:a", "1411k"])
                 cmd.append(str(output_mp4))
-                return _run_ffmpeg_command(ffmpeg, cmd, output_mp4, timeout, "ffmpeg mp4 transcode failed")
+                return _run_ffmpeg_command(ffmpeg, cmd, output_mp4, timeout, "ffmpeg mp4 transcode failed", line_callback)
 
         cmd.extend(["-vf", _subtitle_burn_filter(subtitle_path, font_file)])
         cmd.extend(_video_encoder_ffmpeg_args(video_encoder))
         if existing_audio:
             cmd.extend(["-c:a", "mp3", "-b:a", "1411k"])
         cmd.append(str(output_mp4))
-        return _run_ffmpeg_command(ffmpeg, cmd, output_mp4, timeout, "ffmpeg mp4 transcode failed")
+        return _run_ffmpeg_command(ffmpeg, cmd, output_mp4, timeout, "ffmpeg mp4 transcode failed", line_callback)
 
     cmd.extend(_video_encoder_ffmpeg_args(video_encoder))
     if existing_audio:
         cmd.extend(["-c:a", "mp3", "-b:a", "1411k"])
     cmd.append(str(output_mp4))
-    return _run_ffmpeg_command(ffmpeg, cmd, output_mp4, timeout, "ffmpeg mp4 transcode failed")
+    return _run_ffmpeg_command(ffmpeg, cmd, output_mp4, timeout, "ffmpeg mp4 transcode failed", line_callback)
 
 
 def transcode_ivf_to_mp4_soft(
@@ -997,6 +1043,7 @@ def transcode_ivf_to_mp4_soft(
     convert_subtitles_to_ass: bool = True,
     timeout: int = 600,
     video_encoder: str | None = None,
+    line_callback: Callable[[str], None] | None = None,
 ) -> tuple[bool, str]:
     if not video_path.exists() or video_path.stat().st_size == 0:
         return False, "video stream does not exist"
@@ -1011,7 +1058,7 @@ def transcode_ivf_to_mp4_soft(
     output_mp4.parent.mkdir(parents=True, exist_ok=True)
     _safe_unlink(output_mp4)
 
-    cmd = [ffmpeg, "-y", "-hide_banner", "-loglevel", "warning"]
+    cmd = [ffmpeg, "-y", "-hide_banner"]
     cmd.extend(_video_input_ffmpeg_args(video_path))
     cmd.extend(["-i", str(video_path)])
     for ap in existing_audio:
@@ -1051,7 +1098,7 @@ def transcode_ivf_to_mp4_soft(
                 cmd.extend([f"-disposition:s:{idx}", f"default={default_flag}"])
 
         cmd.append(str(output_mp4))
-        return _run_ffmpeg_command(ffmpeg, cmd, output_mp4, timeout, "ffmpeg mp4 transcode failed")
+        return _run_ffmpeg_command(ffmpeg, cmd, output_mp4, timeout, "ffmpeg mp4 transcode failed", line_callback)
 
 
 def _safe_unlink(path: Path) -> None:
