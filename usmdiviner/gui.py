@@ -7507,11 +7507,11 @@ class WebBridge(QObject):
 
     def _run_cleanup_then_close(self) -> None:
         self.cleanup_generated_artifacts(progress_callback=self._emit_cleanup_progress)
-        # Remove only the empty app-created output folder; keep any exported files.
-        output_dir = Path.cwd() / "output"
+        # Remove only the project-root output folder, regardless of contents.
+        output_dir = Path(__file__).resolve().parents[1] / "output"
         if output_dir.exists():
             try:
-                output_dir.rmdir()
+                shutil.rmtree(output_dir)
             except OSError as exc:
                 logger.debug("failed to remove output folder: %s", exc)
         with self._close_state_lock:
