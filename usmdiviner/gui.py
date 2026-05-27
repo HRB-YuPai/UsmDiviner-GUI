@@ -7421,93 +7421,26 @@ class WebBridge(QObject):
         dialog: _CleanupProgressDialog | None = None,
         progress_callback: Any | None = None,
     ) -> None:
-        with self._artifact_lock:
-            file_items = [Path(p) for p in sorted(self._generated_files)]
-        # Only remove helper artifacts that are safe to clean automatically.
-        # User-specified output folders and final exports are intentionally not tracked here.
-
-        max_workers = min(12, (os.cpu_count() or 1) * 2)
-        
-        def _delete_file(path: Path) -> bool:
-            try:
-                path.unlink()
-                return True
-            except OSError:
-                return False
-        
-        # Delete remaining registered files in parallel
-        existing_files = [p for p in file_items if p.exists() and p.is_file()]
-        total = len(existing_files)
-        
-        if total > 0:
-            removed = 0
-            failed = 0
-            update_interval = max(1, total // 10)  # Update ~10 times
-            
-            with futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-                file_futures = {executor.submit(_delete_file, p): (idx, p) for idx, p in enumerate(existing_files, 1)}
-                
-                # Process completed tasks
-                completed_count = 0
-                for future in futures.as_completed(file_futures):
-                    idx, path = file_futures[future]
-                    try:
-                        success = future.result()
-                        if success:
-                            removed += 1
-                        else:
-                            failed += 1
-                    except Exception:
-                        failed += 1
-                    
-                    completed_count += 1
-                    # Throttle progress updates to reduce overhead
-                    if completed_count % update_interval == 0 or completed_count == total:
-                        try:
-                            relative_path = str(path.relative_to(Path.cwd()))
-                        except ValueError:
-                            relative_path = str(path)
-                        
-                        if callable(progress_callback):
-                            try:
-                                progress_callback(
-                                    self._t("cleanup_dialog_progress", done=completed_count, total=total),
-                                    f"{self._t('cleanup_file_label')} {path.name}",
-                                    f"{self._t('cleanup_relative_path_label')} {relative_path}",
-                                    completed_count,
-                                    total,
-                                    removed,
-                                    failed,
-                                )
-                            except TypeError:
-                                # Fallback
-                                progress_callback(
-                                    self._t("cleanup_dialog_progress", done=completed_count, total=total),
-                                    f"{self._t('cleanup_file_label')} {path.name}",
-                                    f"{self._t('cleanup_relative_path_label')} {relative_path}",
-                                    completed_count,
-                                    total,
-                                )
-            
-        # Final status callback
+        # Do not delete exported files or helper artifacts here.
+        # The only cleanup handled on exit is the app-created empty output folder below.
         if callable(progress_callback):
             try:
                 progress_callback(
-                    self._t("cleanup_dialog_done", removed=total, failed=0),
+                    self._t("cleanup_dialog_done", removed=0, failed=0),
                     self._t("cleanup_file_none"),
                     "",
-                    total or 1,
-                    total or 1,
-                    total,
+                    1,
+                    1,
+                    0,
                     0,
                 )
             except TypeError:
                 progress_callback(
-                    self._t("cleanup_dialog_done", removed=total, failed=0),
+                    self._t("cleanup_dialog_done", removed=0, failed=0),
                     self._t("cleanup_file_none"),
                     "",
-                    total or 1,
-                    total or 1,
+                    1,
+                    1,
                 )
 
     @Slot()
@@ -7574,13 +7507,13 @@ class WebBridge(QObject):
 
     def _run_cleanup_then_close(self) -> None:
         self.cleanup_generated_artifacts(progress_callback=self._emit_cleanup_progress)
-        # Always delete the output folder when program closes
+        # Remove only the empty app-created output folder; keep any exported files.
         output_dir = Path.cwd() / "output"
         if output_dir.exists():
             try:
-                shutil.rmtree(output_dir)
+                output_dir.rmdir()
             except OSError as exc:
-                logger.debug("failed to delete output folder: %s", exc)
+                logger.debug("failed to remove output folder: %s", exc)
         with self._close_state_lock:
             self._allow_window_close = True
         self.hostCloseRequested.emit()
