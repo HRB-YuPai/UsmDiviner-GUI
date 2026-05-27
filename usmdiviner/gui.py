@@ -7401,15 +7401,6 @@ class WebBridge(QObject):
             self._generated_dirs.add(normalized)
 
     def _register_report_artifacts(self, report: dict[str, Any]) -> None:
-        report_path_text = str(report.get("report_path") or "").strip()
-        if report_path_text:
-            self._register_generated_file(Path(report_path_text))
-
-        video = report.get("video") or {}
-        video_text = str(video.get("path") or "").strip()
-        if video_text:
-            self._register_generated_file(Path(video_text))
-
         audio = report.get("audio") or {}
         if isinstance(audio, dict):
             for item in audio.values():
@@ -7418,20 +7409,12 @@ class WebBridge(QObject):
                 path_text = str(item.get("path") or "").strip()
                 if path_text:
                     audio_path = Path(path_text)
-                    self._register_generated_file(audio_path)
                     # Sidecar key files are temporary decode helpers.
                     self._register_generated_file(audio_path.with_suffix(audio_path.suffix + "key"))
                 decode = item.get("decode") if isinstance(item.get("decode"), dict) else {}
                 wav_text = str(decode.get("wav") or "").strip()
                 if wav_text:
                     self._register_generated_file(Path(wav_text))
-
-        mux = report.get("mux") or {}
-        if isinstance(mux, dict):
-            for key in ("mp4", "mkv"):
-                mux_text = str(mux.get(key) or "").strip()
-                if mux_text:
-                    self._register_generated_file(Path(mux_text))
 
     def cleanup_generated_artifacts(
         self,
@@ -7440,19 +7423,10 @@ class WebBridge(QObject):
     ) -> None:
         with self._artifact_lock:
             file_items = [Path(p) for p in sorted(self._generated_files)]
-            dir_items = [Path(p) for p in sorted(self._generated_dirs)]
+        # Only remove helper artifacts that are safe to clean automatically.
+        # User-specified output folders and final exports are intentionally not tracked here.
 
-        # Parallel directory deletion using ThreadPoolExecutor
         max_workers = min(12, (os.cpu_count() or 1) * 2)
-        
-        def _delete_dir_tree(folder: Path) -> bool:
-            if not folder.exists() or not folder.is_dir():
-                return True
-            try:
-                shutil.rmtree(folder)
-                return True
-            except OSError:
-                return False
         
         def _delete_file(path: Path) -> bool:
             try:
@@ -7460,14 +7434,6 @@ class WebBridge(QObject):
                 return True
             except OSError:
                 return False
-        
-        # Fast path: if we have registered dirs, delete them in parallel
-        # This covers most intermediate files and folders
-        if dir_items:
-            with futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-                dir_futures = [executor.submit(_delete_dir_tree, d) for d in dir_items]
-                # Wait for all directory deletions to complete
-                futures.wait(dir_futures)
         
         # Delete remaining registered files in parallel
         existing_files = [p for p in file_items if p.exists() and p.is_file()]
@@ -7523,22 +7489,6 @@ class WebBridge(QObject):
                                     total,
                                 )
             
-            # Final cleanup: remove empty parent directories
-            parent_dirs: set[Path] = set()
-            for path in existing_files:
-                try:
-                    parent_dirs.add(path.parent)
-                except Exception:
-                    pass
-            
-            # Delete empty dirs in reverse order (deepest first)
-            for folder in sorted(parent_dirs, key=lambda p: len(str(p)), reverse=True):
-                if folder.exists() and folder.is_dir():
-                    try:
-                        folder.rmdir()
-                    except OSError:
-                        pass
-        
         # Final status callback
         if callable(progress_callback):
             try:
@@ -9340,7 +9290,6 @@ class WebBridge(QObject):
             return
 
         logger.info(f"FFMPEG log exported: {target_path}")
-        self._register_generated_file(Path(target_path))
 
     @staticmethod
     def _build_index_item(report: dict[str, Any]) -> dict[str, Any]:
@@ -9657,7 +9606,6 @@ class WebBridge(QObject):
             )
             return
         output_dir = Path(output_text)
-        self._register_generated_dir(output_dir)
 
         candidates = payload.get("candidates") if isinstance(payload.get("candidates"), list) else []
         subtitle_source = str(payload.get("subtitle_source") or "off").strip().lower()
@@ -10121,7 +10069,6 @@ class WebBridge(QObject):
                     def _mark_output(path: Path, success_flag: bool) -> None:
                         nonlocal reveal_target
                         if success_flag and path.exists() and path.is_file():
-                            self._register_generated_file(path)
                             if reveal_target is None:
                                 reveal_target = path
 
@@ -10711,7 +10658,6 @@ class WebBridge(QObject):
             )
 
             Path(opt.output_dir).mkdir(parents=True, exist_ok=True)
-            self._register_generated_dir(Path(opt.output_dir))
             max_workers = max(os.cpu_count() or 1, 1)
             use_parallel = (not no_parallel) and max_workers > 1 and len(files) > 1
 
