@@ -6,6 +6,7 @@ import datetime as dt
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -57,7 +58,7 @@ SUBTITLE_LANG_CODES = (
     "TR",
     "VI",
 )
-ONLINE_SUBTITLE_RAW_URL = "https://gitlab.com/Dimbreath/AnimeGameData/-/raw/master/Subtitle/{lang}/{name}.srt"
+ONLINE_SUBTITLE_RAW_URL = "https://raw.githubusercontent.com/DimbreathBot/AnimeGameData/main/Subtitle/{lang}/{name}.srt"
 SUPPORTED_GAMES: tuple[str, ...] = (
     "honkai_star_rail",
     "genshin_impact",
@@ -82,6 +83,73 @@ LEGACY_USM_KEY_INCREMENT_CANDIDATES = (
     get_user_data_path() / "usm_data/usm_key_increment.json",
     get_resource_path("assets/usm_data/genshin_impact/usm_key_increment.json"),
 )
+
+_FFMPEG_PROGRESS_TIME_RE = re.compile(r"\btime=(\d{2}):(\d{2}):(\d{2}(?:\.\d+)?)\b")
+
+
+def _parse_ffmpeg_progress_time_seconds(line: str) -> float | None:
+    match = _FFMPEG_PROGRESS_TIME_RE.search(str(line or ""))
+    if not match:
+        return None
+    try:
+        hh = int(match.group(1))
+        mm = int(match.group(2))
+        ss = float(match.group(3))
+    except (TypeError, ValueError):
+        return None
+    total = hh * 3600.0 + mm * 60.0 + ss
+    return total if total >= 0.0 else None
+
+
+def _ffprobe_path_from_ffmpeg(ffmpeg: str | None) -> str | None:
+    ffmpeg_text = str(ffmpeg or "").strip()
+    if not ffmpeg_text:
+        return shutil.which("ffprobe")
+    ffmpeg_path = Path(ffmpeg_text)
+    probe_name = "ffprobe.exe" if os.name == "nt" else "ffprobe"
+    candidate = ffmpeg_path.with_name(probe_name)
+    if candidate.is_file():
+        return str(candidate)
+    return shutil.which("ffprobe")
+
+
+def _probe_media_duration_seconds(ffmpeg: str | None, media_path: Path) -> float | None:
+    if not media_path.exists() or not media_path.is_file():
+        return None
+    ffprobe = _ffprobe_path_from_ffmpeg(ffmpeg)
+    if not ffprobe:
+        return None
+    try:
+        proc = subprocess.run(
+            [
+                ffprobe,
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                str(media_path),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=6,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    raw = str(proc.stdout or "").strip().splitlines()
+    if not raw:
+        return None
+    try:
+        value = float(raw[-1].strip())
+    except ValueError:
+        return None
+    return value if value > 0.0 else None
 
 
 def _load_translations() -> dict[str, dict[str, str]]:
@@ -1731,6 +1799,34 @@ HTML_TEMPLATE = r"""<!doctype html>
 
         .video-export-table tbody tr:hover {
             background: color-mix(in srgb, var(--surface-2) 78%, transparent);
+        }
+
+        .video-export-table tbody tr.pending {
+            opacity: 0.8;
+        }
+
+        .video-export-table tbody tr.ok {
+            background: #163524;
+        }
+
+        .video-export-table tbody tr.warn {
+            background: #3a3115;
+        }
+
+        .video-export-table tbody tr.err {
+            background: #3a1d1d;
+        }
+
+        [data-theme="light"] .video-export-table tbody tr.ok {
+            background: #def5ea;
+        }
+
+        [data-theme="light"] .video-export-table tbody tr.warn {
+            background: #fdf3db;
+        }
+
+        [data-theme="light"] .video-export-table tbody tr.err {
+            background: #fde2e2;
         }
 
         .video-export-audio-cell {
@@ -3813,6 +3909,8 @@ HTML_TEMPLATE = r"""<!doctype html>
 
         function runVideoExportPayload(payload) {
             if (!bridge || !bridge.startVideoExport || videoExportRunning) return;
+            // Starting a new export should always reset progress models and bars.
+            renderVideoExportRows();
             videoExportRunning = true;
             setVideoExportUiRunning(true);
             bridge.startVideoExport(JSON.stringify(payload));
@@ -3938,7 +4036,7 @@ HTML_TEMPLATE = r"""<!doctype html>
                 : "";
             const template = String(
                 dict.video_export_subtitle_online_missing_confirm
-                || "The following files did not match online subtitles ({count}/{total}). Continue export without subtitles for these files?\n\n{files}{more}"
+                || "The following files did not match online subtitles ({count}/{total}). Continue export and skip these files?\n\n{files}{more}"
             );
             const message = template
                 .replace("{count}", String(missing.length))
@@ -3960,7 +4058,7 @@ HTML_TEMPLATE = r"""<!doctype html>
             payload.online_subtitle_coverage_confirmed = true;
             if (payload.online_subtitle_all_missing) {
                 const dict = t(currentLang());
-                appendLog(dict.video_export_subtitle_online_all_missing_skip_ass_log || "[INFO] Online subtitles missed for all selected videos; skipping ASS conversion prompt and continuing export without subtitles.");
+                appendLog(dict.video_export_subtitle_online_all_missing_skip_ass_log || "[INFO] Online subtitles missed for all selected videos; skipping ASS conversion prompt and continuing export with skip-on-miss.");
                 runVideoExportPayload(payload);
                 return;
             }
@@ -4133,7 +4231,7 @@ HTML_TEMPLATE = r"""<!doctype html>
             const raw = String(statusText || "").trim();
             if (!raw) return "";
             const langs = ["zh-CN", "zh-TW", "en"];
-            const keys = ["pending", "running", "done", "failed"];
+            const keys = ["pending", "running", "done", "failed", "skipped"];
             for (const lang of langs) {
                 const dict = t(lang);
                 for (const key of keys) {
@@ -4147,6 +4245,7 @@ HTML_TEMPLATE = r"""<!doctype html>
             if (lowered.includes("running")) return "running";
             if (lowered.includes("done")) return "done";
             if (lowered.includes("failed")) return "failed";
+            if (lowered.includes("skip")) return "skipped";
             return "";
         }
 
@@ -4173,7 +4272,23 @@ HTML_TEMPLATE = r"""<!doctype html>
                     const key = normalizeVideoExportStatusText(statusEl.textContent || "") || "pending";
                     const next = dict[`video_export_status_${key}`] || statusEl.textContent || "";
                     statusEl.textContent = next;
+                    setVideoExportRowStatusClass(id, key);
                 }
+            }
+        }
+
+        function setVideoExportRowStatusClass(id, statusKey) {
+            const rowEl = byId(`video_export_row_${id}`);
+            if (!rowEl) return;
+            rowEl.classList.remove("pending", "ok", "warn", "err");
+            if (statusKey === "done") {
+                rowEl.classList.add("ok");
+            } else if (statusKey === "skipped") {
+                rowEl.classList.add("warn");
+            } else if (statusKey === "failed") {
+                rowEl.classList.add("err");
+            } else {
+                rowEl.classList.add("pending");
             }
         }
 
@@ -4833,7 +4948,7 @@ HTML_TEMPLATE = r"""<!doctype html>
             byId("blk_save_confirm_modal").classList.add("hidden");
         }
 
-        function openBlkSaveSuccessModal(message, path, canReveal, title = null) {
+        function openBlkSaveSuccessModal(message, path, canReveal, title = null, displayPath = null) {
             blkSaveSuccessPath = String(path || "");
             blkSaveCanReveal = !!canReveal;
             if (title) {
@@ -4841,9 +4956,10 @@ HTML_TEMPLATE = r"""<!doctype html>
             }
             setText("blk_save_success_message", message || "");
             const pathEl = byId("blk_save_success_path");
+            const shownPath = displayPath === null ? blkSaveSuccessPath : String(displayPath || "");
             if (pathEl) {
-                pathEl.value = blkSaveSuccessPath;
-                pathEl.classList.toggle("hidden", !blkSaveSuccessPath);
+                pathEl.value = shownPath;
+                pathEl.classList.toggle("hidden", !shownPath);
             }
             const revealBtn = byId("blk_save_reveal_btn");
             if (revealBtn) {
@@ -5186,6 +5302,7 @@ HTML_TEMPLATE = r"""<!doctype html>
                 videoExportProgressModel.set(id, { display: 0, target: 0, lastTick: Date.now() });
                 const tr = document.createElement("tr");
                 tr.id = `video_export_row_${id}`;
+                tr.className = "pending";
                 const audioText = formatVideoExportAudioTracks(item, true);
                 const displayName = displayUsmName(String(item.name || "—"));
                 tr.innerHTML = `
@@ -5280,6 +5397,7 @@ HTML_TEMPLATE = r"""<!doctype html>
             if (statusEl && status) {
                 const normalizedKey = normalizeVideoExportStatusText(status);
                 statusEl.textContent = normalizedKey ? (dict[`video_export_status_${normalizedKey}`] || String(status)) : String(status);
+                setVideoExportRowStatusClass(id, normalizedKey || "pending");
             }
             _ensureVideoExportPump();
         }
@@ -5442,7 +5560,8 @@ HTML_TEMPLATE = r"""<!doctype html>
                     payload.message || "",
                     payload.path || "",
                     !!payload.can_reveal,
-                    payload.title || dict.video_export_result_title || ""
+                    payload.title || dict.video_export_result_title || "",
+                    payload.path_display || payload.path || ""
                 );
             } catch (_) {
                 openBlkSaveSuccessModal(
@@ -5576,6 +5695,8 @@ HTML_TEMPLATE = r"""<!doctype html>
             setText("video_export_subtitle_missing_confirm_title", dict.video_export_subtitle_online_missing_title || "Online Subtitles Not Found");
             setText("video_export_subtitle_missing_confirm_yes_btn", dict.video_export_subtitle_online_missing_continue || "Continue Export");
             setText("video_export_subtitle_missing_confirm_no_btn", dict.video_export_subtitle_online_missing_cancel || dict.settings_cancel || "Cancel");
+            setText("video_export_online_check_title", dict.video_export_online_check_title || "Checking Online Subtitles");
+            setText("video_export_online_check_message", dict.video_export_online_check_message || "Matching selected videos with online subtitle sources. Please wait...");
             setText("input_selection_modal_title", dict.input_selection_modal_title || "Selected USM Files");
             setText("input_selection_close_btn", dict.close || "Close");
             setText("blk_save_success_title", dict.blk_versions_saved_title || dict.blk_versions_title);
@@ -5925,22 +6046,39 @@ HTML_TEMPLATE = r"""<!doctype html>
                 showCopyToast(dict.copy_log_empty || "Nothing to copy.");
                 return;
             }
+
+            if (bridge && bridge.copyText) {
+                copyTextToClipboard(text);
+                showCopyToast(dict.cell_copied || "Copied");
+                return;
+            }
+
+            const fallbackCopy = () => {
+                const textarea = document.createElement("textarea");
+                textarea.value = text;
+                document.body.appendChild(textarea);
+                textarea.select();
+                const copied = document.execCommand("copy");
+                document.body.removeChild(textarea);
+                if (copied) {
+                    const dictLocal = t(currentLang());
+                    showCopyToast(dictLocal.cell_copied || "Copied");
+                } else {
+                    showCopyToast(dict.copy_log_failed || "Copy failed");
+                }
+            };
+
             if (navigator.clipboard && navigator.clipboard.writeText) {
                 navigator.clipboard.writeText(text).then(() => {
                     const dict_local = t(currentLang());
                     showCopyToast(dict_local.cell_copied || "Copied");
                 }).catch(err => {
                     console.error("Clipboard error:", err);
+                    fallbackCopy();
                 });
             } else {
-                // Fallback 用于不支持 clipboard API 的浏览器
-                const textarea = document.createElement("textarea");
-                textarea.value = text;
-                document.body.appendChild(textarea);
-                textarea.select();
-                document.execCommand("copy");
-                document.body.removeChild(textarea);
-                showCopyToast(dict.cell_copied || "Copied");
+                // Fallback for environments without Clipboard API support.
+                fallbackCopy();
             }
         }
 
@@ -9878,10 +10016,12 @@ class WebBridge(QObject):
         done = 0
         success = 0
         failed = 0
+        skipped = 0
         subtitle_miss_count = 0
         subtitle_included_count = 0
-        reveal_target: Path | None = None
+        exported_paths: list[Path] = []
         effective_export_mode = export_mode
+        output_resolution = "2k"
         requested_hw = bool(use_hwaccel)
         active_video_encoder = str(hw_encoder or "").strip().lower() if requested_hw else ""
 
@@ -9922,6 +10062,7 @@ class WebBridge(QObject):
                 row_id = str((item or {}).get("id") or "")
                 name = str((item or {}).get("name") or row_id or "video")
                 ivf = Path(str((item or {}).get("ivf") or ""))
+                input_duration_seconds = _probe_media_duration_seconds(ffmpeg, ivf)
                 stem = Path(name).stem if name else ivf.stem
                 row_export_mode = effective_export_mode
                 audio_tracks = [track for track in ((item or {}).get("audio_tracks") or []) if isinstance(track, dict)]
@@ -9970,6 +10111,20 @@ class WebBridge(QObject):
                     else:
                         subtitle_miss_count += 1
 
+                if effective_subtitle_source == "online" and subtitle_languages and not subtitle_inputs:
+                    self.logMessage.emit(
+                        f"[INFO] [{name}] skip export: online subtitles not found"
+                    )
+                    done += 1
+                    skipped += 1
+                    _emit_video_progress(
+                        row_id,
+                        100,
+                        self._t("video_export_status_skipped"),
+                        done,
+                    )
+                    continue
+
                 _emit_video_progress(
                     row_id,
                     8,
@@ -9992,30 +10147,68 @@ class WebBridge(QObject):
                     )
                 if ivf.exists() and ivf.is_file():
                     ext = ".mkv" if fmt == "mkv" else ".mp4"
+                    ffmpeg_stage_floor = 68
+                    ffmpeg_stage_ceiling = 92
+                    ffmpeg_progress_value = ffmpeg_stage_floor
+                    ffmpeg_fallback_ticks = 0
+
+                    def _emit_ffmpeg_stage_progress(progress_value: int) -> None:
+                        safe_value = max(ffmpeg_stage_floor, min(ffmpeg_stage_ceiling, int(progress_value)))
+                        _emit_video_progress(
+                            row_id,
+                            safe_value,
+                            self._t("video_export_status_running"),
+                            done + (safe_value / 100.0),
+                        )
+
+                    def _make_ffmpeg_progress_callback() -> Any:
+                        nonlocal ffmpeg_progress_value, ffmpeg_fallback_ticks
+
+                        def _callback(line: str) -> None:
+                            nonlocal ffmpeg_progress_value, ffmpeg_fallback_ticks
+                            self._emit_ffmpeg_log(line)
+
+                            next_value = ffmpeg_progress_value
+                            parsed_seconds = _parse_ffmpeg_progress_time_seconds(line)
+                            if parsed_seconds is not None and input_duration_seconds and input_duration_seconds > 0.0:
+                                ratio = max(0.0, min(1.0, parsed_seconds / input_duration_seconds))
+                                next_value = ffmpeg_stage_floor + int(round((ffmpeg_stage_ceiling - ffmpeg_stage_floor) * ratio))
+                            elif "frame=" in str(line or ""):
+                                ffmpeg_fallback_ticks += 1
+                                # Keep moving even when duration probing fails.
+                                fallback_ratio = min(0.95, 1.0 - (0.92 ** ffmpeg_fallback_ticks))
+                                next_value = ffmpeg_stage_floor + int(round((ffmpeg_stage_ceiling - ffmpeg_stage_floor) * fallback_ratio))
+
+                            next_value = max(ffmpeg_progress_value, min(ffmpeg_stage_ceiling, next_value))
+                            if next_value > ffmpeg_progress_value:
+                                ffmpeg_progress_value = next_value
+                                _emit_ffmpeg_stage_progress(ffmpeg_progress_value)
+
+                        return _callback
+
                     _emit_video_progress(
                         row_id,
-                        42,
+                        max(42, ffmpeg_stage_floor),
                         self._t("video_export_status_running"),
-                        done + 0.42,
+                        done + (max(42, ffmpeg_stage_floor) / 100.0),
                     )
 
                     def _mark_output(path: Path, success_flag: bool) -> None:
-                        nonlocal reveal_target
                         if success_flag and path.exists() and path.is_file():
-                            if reveal_target is None:
-                                reveal_target = path
+                            exported_paths.append(path)
 
                     def _export_one(path: Path, subs: list[tuple[Path, str]], mode: str) -> tuple[bool, str]:
                         preferred_encoder = active_video_encoder or None
                         self.logMessage.emit(
                             "[INFO] [FFMPEG] "
                             f"[{name}] mode={mode} fmt={fmt} subtitles={len(subs)} audio_tracks={len(audio_inputs)} "
-                            f"subtitle_convert={subtitle_convert_mode} encoder={(preferred_encoder or 'libx264')} out={path}"
+                            f"subtitle_convert={subtitle_convert_mode} resolution={output_resolution} encoder={(preferred_encoder or 'libx264')} duration={(input_duration_seconds if input_duration_seconds is not None else 'unknown')} out={path}"
                         )
                         # Emit a header line to FFMPEG log window so it's always visible
                         self._emit_ffmpeg_log(
                             f">>> [{name}] ffmpeg start | mode={mode} encoder={preferred_encoder or 'libx264'} out={path.name}"
                         )
+                        ffmpeg_progress_callback = _make_ffmpeg_progress_callback()
 
                         def _run_with_encoder(encoder: str | None) -> tuple[bool, str]:
                             if fmt == "mkv":
@@ -10028,8 +10221,9 @@ class WebBridge(QObject):
                                         path,
                                         default_sub_lang=default_subtitle_lang,
                                         convert_subtitles_to_ass=subtitle_convert_mode == "ass",
+                                        output_resolution=output_resolution,
                                         video_encoder=encoder,
-                                        line_callback=self._emit_ffmpeg_log,
+                                        line_callback=ffmpeg_progress_callback,
                                     )
                                 return mux_to_mkv(
                                     ffmpeg,
@@ -10038,8 +10232,9 @@ class WebBridge(QObject):
                                     subs,
                                     path,
                                     convert_subtitles_to_ass=subtitle_convert_mode == "ass",
+                                    output_resolution=output_resolution,
                                     video_encoder=encoder,
-                                    line_callback=self._emit_ffmpeg_log,
+                                    line_callback=ffmpeg_progress_callback,
                                 )
                             if mode == "container":
                                 return transcode_ivf_to_mp4_soft(
@@ -10050,8 +10245,9 @@ class WebBridge(QObject):
                                     path,
                                     default_sub_lang=default_subtitle_lang,
                                     convert_subtitles_to_ass=subtitle_convert_mode == "ass",
+                                    output_resolution=output_resolution,
                                     video_encoder=encoder,
-                                    line_callback=self._emit_ffmpeg_log,
+                                    line_callback=ffmpeg_progress_callback,
                                 )
                             return transcode_ivf_to_mp4(
                                 ffmpeg,
@@ -10060,8 +10256,9 @@ class WebBridge(QObject):
                                 subs,
                                 path,
                                 convert_subtitles_to_ass=subtitle_convert_mode == "ass",
+                                output_resolution=output_resolution,
                                 video_encoder=encoder,
-                                line_callback=self._emit_ffmpeg_log,
+                                line_callback=ffmpeg_progress_callback,
                             )
 
                         done_ok, detail = _run_with_encoder(preferred_encoder)
@@ -10217,9 +10414,10 @@ class WebBridge(QObject):
                 {
                     "title": self._t("video_export_result_title"),
                     "message": (
-                        f"{self._t('video_export_done', ok=success, failed=failed)}\n{mode_note}\n{subtitle_note}".strip()
+                        f"{self._t('video_export_done_with_skipped', ok=success, failed=failed, skipped=skipped) if skipped > 0 else self._t('video_export_done', ok=success, failed=failed)}\n{mode_note}\n{subtitle_note}".strip()
                     ),
-                    "path": str(reveal_target if reveal_target is not None else output_dir),
+                    "path": str(output_dir),
+                    "path_display": "\n".join(str(p) for p in exported_paths) if exported_paths else str(output_dir),
                     "can_reveal": self._can_reveal_saved_path(),
                 },
                 ensure_ascii=False,

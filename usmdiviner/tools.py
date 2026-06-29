@@ -36,9 +36,8 @@ Style: Default,SDK_SC_Web,11.0,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
 
-_SRT_TIME_RE = re.compile(
-    r"^\s*(\d{1,2}):(\d{2}):(\d{2})[,.](\d{1,3})\s*-->\s*(\d{1,2}):(\d{2}):(\d{2})[,.](\d{1,3})\s*$"
-)
+_SRT_TIME_TOKEN_RE = re.compile(r"(?:\d{1,2}:)?\d{1,2}:\d{2}[,.]\d{1,3}")
+_SRT_DOT_TIME_RE = re.compile(r"(\d{1,2})\.(\d{2})\.(\d{2})([,.]\d{1,3})")
 
 
 def _subtitle_font_file() -> Path | None:
@@ -77,6 +76,11 @@ def _ass_escape_text(text: str) -> str:
 
 def _parse_srt_time(value: str) -> float:
     parts = value.strip().replace(",", ".").split(":")
+    if len(parts) == 2:
+        hour = 0
+        minute = int(parts[0])
+        sec = float(parts[1])
+        return hour * 3600.0 + minute * 60.0 + sec
     if len(parts) != 3:
         return 0.0
     hour = int(parts[0])
@@ -85,10 +89,39 @@ def _parse_srt_time(value: str) -> float:
     return hour * 3600.0 + minute * 60.0 + sec
 
 
-def _convert_srt_to_ass(src: Path, dst: Path) -> bool:
+def _read_subtitle_text(src: Path) -> str | None:
+    # Try common subtitle encodings first, then fall back to replacement decode.
+    encodings = ("utf-8-sig", "utf-16", "utf-16-le", "utf-16-be", "gb18030")
+    for enc in encodings:
+        try:
+            return src.read_text(encoding=enc)
+        except (OSError, UnicodeError):
+            continue
     try:
-        content = src.read_text(encoding="utf-8-sig", errors="replace")
+        return src.read_text(encoding="utf-8-sig", errors="replace")
     except OSError:
+        return None
+
+
+def _normalize_srt_time_line(text: str) -> str:
+    # Handle common malformed separators, similar to SubtitleEdit's tolerant parser.
+    line = str(text or "")
+    line = line.replace("،", ",").replace("", ",").replace("¡", ",")
+    line = line.replace("\u200b", " ").replace("\ufeff", " ")
+    line = line.replace("—>", "-->").replace("——>", "-->")
+    line = line.replace(" -> ", " --> ").replace(" - > ", " --> ")
+    line = line.replace(" -- > ", " --> ").replace(" - -> ", " --> ")
+    line = line.replace(" -->> ", " --> ").replace(" ---> ", " --> ")
+    # Fix malformed HH.MM.SS,mmm style into HH:MM:SS,mmm.
+    line = _SRT_DOT_TIME_RE.sub(r"\1:\2:\3\4", line)
+    while "  " in line:
+        line = line.replace("  ", " ")
+    return line.strip()
+
+
+def _convert_srt_to_ass(src: Path, dst: Path) -> bool:
+    content = _read_subtitle_text(src)
+    if content is None:
         return False
 
     blocks = re.split(r"\n\s*\n", content.replace("\r\n", "\n").replace("\r", "\n"))
@@ -101,11 +134,14 @@ def _convert_srt_to_ass(src: Path, dst: Path) -> bool:
             lines = lines[1:]
         if len(lines) < 2:
             continue
-        match = _SRT_TIME_RE.match(lines[0])
-        if not match:
+        time_line = _normalize_srt_time_line(lines[0])
+        if "-->" not in time_line and ">" not in time_line:
             continue
-        start_raw = f"{match.group(1)}:{match.group(2)}:{match.group(3)}.{match.group(4)}"
-        end_raw = f"{match.group(5)}:{match.group(6)}:{match.group(7)}.{match.group(8)}"
+        time_tokens = _SRT_TIME_TOKEN_RE.findall(time_line)
+        if len(time_tokens) < 2:
+            continue
+        start_raw = time_tokens[0]
+        end_raw = time_tokens[1]
         start = _to_ass_time(_parse_srt_time(start_raw))
         end = _to_ass_time(_parse_srt_time(end_raw))
         text = _ass_escape_text("\n".join(lines[1:]))
@@ -124,9 +160,8 @@ def _convert_srt_to_ass(src: Path, dst: Path) -> bool:
 
 
 def _convert_txt_to_ass(src: Path, dst: Path) -> bool:
-    try:
-        content = src.read_text(encoding="utf-8-sig", errors="replace")
-    except OSError:
+    content = _read_subtitle_text(src)
+    if content is None:
         return False
 
     lines = [line.strip() for line in content.replace("\r\n", "\n").replace("\r", "\n").split("\n") if line.strip()]
@@ -208,6 +243,24 @@ def _video_encoder_ffmpeg_args(video_encoder: str | None = None) -> list[str]:
     return ["-c:v", "libx264", "-preset", "medium", "-crf", "10"]
 
 
+def _video_scale_filter(output_resolution: str | None = None) -> str | None:
+    mode = str(output_resolution or "").strip().lower()
+    if mode in {"", "source", "original", "native"}:
+        return None
+    if mode in {"2k", "1440p", "2560x1440"}:
+        return "scale=-2:1440:flags=lanczos"
+    if mode in {"4k", "2160p", "3840x2160"}:
+        return "scale=-2:2160:flags=lanczos"
+    return None
+
+
+def _merge_video_filters(*filters: str | None) -> str | None:
+    kept = [str(f).strip() for f in filters if str(f or "").strip()]
+    if not kept:
+        return None
+    return ",".join(kept)
+
+
 def _run_probe_command(command: list[str], timeout: int = 6) -> str:
     try:
         proc = subprocess.run(
@@ -215,6 +268,7 @@ def _run_probe_command(command: list[str], timeout: int = 6) -> str:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            encoding="utf-8",
             timeout=timeout,
             errors="replace",
         )
@@ -252,6 +306,7 @@ def _detect_system_gpu_model_name() -> str:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
                 text=True,
+                encoding="utf-8",
                 timeout=5,
                 errors="replace"
             )
@@ -671,6 +726,8 @@ def decode_with_vgmstream(
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
         )
     except (OSError, subprocess.SubprocessError) as exc:
@@ -727,6 +784,8 @@ def _run_ffmpeg_command(
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 cwd=ffmpeg_cwd,
                 env=env,
             )
@@ -763,6 +822,8 @@ def _run_ffmpeg_command(
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=timeout,
                 cwd=ffmpeg_cwd,
                 env=env,
@@ -790,6 +851,7 @@ def mux_to_mkv(
     subtitle_inputs: list[tuple[Path, str]] | None,
     output_mkv: Path,
     convert_subtitles_to_ass: bool = True,
+    output_resolution: str | None = None,
     timeout: int = 300,
     video_encoder: str | None = None,
     line_callback: Callable[[str], None] | None = None,
@@ -815,6 +877,7 @@ def mux_to_mkv(
     cmd.extend(["-map", "0:v:0"])
     for i in range(len(existing_audio)):
         cmd.extend(["-map", f"{i + 1}:a:0"])
+    scale_filter = _video_scale_filter(output_resolution)
 
     # Burn one subtitle track using libass + bundled font for deterministic rendering.
     subtitle_path = existing_subtitles[0][0] if existing_subtitles else None
@@ -827,20 +890,26 @@ def mux_to_mkv(
                 ass_path = _ensure_ass_subtitle(subtitle_path, Path(tmp))
                 if ass_path is None:
                     return False, f"failed to convert subtitle to ASS: {subtitle_path.name}"
-                cmd.extend(["-vf", _subtitle_burn_filter(ass_path, font_file)])
+                merged_filter = _merge_video_filters(_subtitle_burn_filter(ass_path, font_file), scale_filter)
+                if merged_filter:
+                    cmd.extend(["-vf", merged_filter])
                 cmd.extend(_video_encoder_ffmpeg_args(video_encoder))
                 if existing_audio:
                     cmd.extend(["-c:a", "mp3", "-b:a", "1411k"])
                 cmd.append(str(output_mkv))
                 return _run_ffmpeg_command(ffmpeg, cmd, output_mkv, timeout, "ffmpeg failed", line_callback)
 
-        cmd.extend(["-vf", _subtitle_burn_filter(subtitle_path, font_file)])
+        merged_filter = _merge_video_filters(_subtitle_burn_filter(subtitle_path, font_file), scale_filter)
+        if merged_filter:
+            cmd.extend(["-vf", merged_filter])
         cmd.extend(_video_encoder_ffmpeg_args(video_encoder))
         if existing_audio:
             cmd.extend(["-c:a", "mp3", "-b:a", "1411k"])
         cmd.append(str(output_mkv))
         return _run_ffmpeg_command(ffmpeg, cmd, output_mkv, timeout, "ffmpeg failed", line_callback)
 
+    if scale_filter:
+        cmd.extend(["-vf", scale_filter])
     cmd.extend(_video_encoder_ffmpeg_args(video_encoder))
     if existing_audio:
         cmd.extend(["-c:a", "mp3", "-b:a", "1411k"])
@@ -857,6 +926,7 @@ def mux_to_mkv_soft(
     output_mkv: Path,
     default_sub_lang: str = "",
     convert_subtitles_to_ass: bool = True,
+    output_resolution: str | None = None,
     timeout: int = 300,
     video_encoder: str | None = None,
     line_callback: Callable[[str], None] | None = None,
@@ -901,6 +971,9 @@ def mux_to_mkv_soft(
         for i in range(len(prepared_subs)):
             cmd.extend(["-map", f"{subtitle_start + i}:s:0"])
 
+        scale_filter = _video_scale_filter(output_resolution)
+        if scale_filter:
+            cmd.extend(["-vf", scale_filter])
         cmd.extend(_video_encoder_ffmpeg_args(video_encoder))
         if existing_audio:
             cmd.extend(["-c:a", "mp3", "-b:a", "1411k"])
@@ -930,6 +1003,7 @@ def transcode_mkv_to_mp4(
     input_mkv: Path,
     output_mp4: Path,
     subtitle_input: Path | None = None,
+    output_resolution: str | None = None,
     timeout: int = 600,
     video_encoder: str | None = None,
 ) -> tuple[bool, str]:
@@ -947,8 +1021,9 @@ def transcode_mkv_to_mp4(
             "-i",
             str(input_mkv),
         ]
-        if subtitle_filter:
-            cmd.extend(["-vf", subtitle_filter])
+        merged_filter = _merge_video_filters(subtitle_filter, _video_scale_filter(output_resolution))
+        if merged_filter:
+            cmd.extend(["-vf", merged_filter])
         cmd.extend(_video_encoder_ffmpeg_args(video_encoder))
         cmd.extend(["-c:a", "mp3", "-b:a", "1411k", str(output_mp4)])
         return cmd
@@ -976,6 +1051,7 @@ def transcode_ivf_to_mp4(
     subtitle_inputs: list[tuple[Path, str]] | None,
     output_mp4: Path,
     convert_subtitles_to_ass: bool = True,
+    output_resolution: str | None = None,
     timeout: int = 600,
     video_encoder: str | None = None,
     line_callback: Callable[[str], None] | None = None,
@@ -1001,6 +1077,7 @@ def transcode_ivf_to_mp4(
     cmd.extend(["-map", "0:v:0"])
     for i in range(len(existing_audio)):
         cmd.extend(["-map", f"{i + 1}:a:0"])
+    scale_filter = _video_scale_filter(output_resolution)
 
     subtitle_path = existing_subtitles[0][0] if existing_subtitles else None
     if subtitle_path is not None:
@@ -1012,20 +1089,26 @@ def transcode_ivf_to_mp4(
                 ass_path = _ensure_ass_subtitle(subtitle_path, Path(tmp))
                 if ass_path is None:
                     return False, f"failed to convert subtitle to ASS: {subtitle_path.name}"
-                cmd.extend(["-vf", _subtitle_burn_filter(ass_path, font_file)])
+                merged_filter = _merge_video_filters(_subtitle_burn_filter(ass_path, font_file), scale_filter)
+                if merged_filter:
+                    cmd.extend(["-vf", merged_filter])
                 cmd.extend(_video_encoder_ffmpeg_args(video_encoder))
                 if existing_audio:
                     cmd.extend(["-c:a", "mp3", "-b:a", "1411k"])
                 cmd.append(str(output_mp4))
                 return _run_ffmpeg_command(ffmpeg, cmd, output_mp4, timeout, "ffmpeg mp4 transcode failed", line_callback)
 
-        cmd.extend(["-vf", _subtitle_burn_filter(subtitle_path, font_file)])
+        merged_filter = _merge_video_filters(_subtitle_burn_filter(subtitle_path, font_file), scale_filter)
+        if merged_filter:
+            cmd.extend(["-vf", merged_filter])
         cmd.extend(_video_encoder_ffmpeg_args(video_encoder))
         if existing_audio:
             cmd.extend(["-c:a", "mp3", "-b:a", "1411k"])
         cmd.append(str(output_mp4))
         return _run_ffmpeg_command(ffmpeg, cmd, output_mp4, timeout, "ffmpeg mp4 transcode failed", line_callback)
 
+    if scale_filter:
+        cmd.extend(["-vf", scale_filter])
     cmd.extend(_video_encoder_ffmpeg_args(video_encoder))
     if existing_audio:
         cmd.extend(["-c:a", "mp3", "-b:a", "1411k"])
@@ -1041,6 +1124,7 @@ def transcode_ivf_to_mp4_soft(
     output_mp4: Path,
     default_sub_lang: str = "",
     convert_subtitles_to_ass: bool = True,
+    output_resolution: str | None = None,
     timeout: int = 600,
     video_encoder: str | None = None,
     line_callback: Callable[[str], None] | None = None,
@@ -1085,6 +1169,9 @@ def transcode_ivf_to_mp4_soft(
         for i in range(len(prepared_subs)):
             cmd.extend(["-map", f"{subtitle_start + i}:s:0"])
 
+        scale_filter = _video_scale_filter(output_resolution)
+        if scale_filter:
+            cmd.extend(["-vf", scale_filter])
         cmd.extend(_video_encoder_ffmpeg_args(video_encoder))
         if existing_audio:
             cmd.extend(["-c:a", "mp3", "-b:a", "1411k"])
